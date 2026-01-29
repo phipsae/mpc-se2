@@ -99,6 +99,38 @@ export interface SavedProject {
   vercelDeployment: { url: string; projectId: string } | null;
 }
 
+export type BuildProgressStatus =
+  | "idle"
+  | "generating"
+  | "compiling"
+  | "fixing_compilation"
+  | "checking_security"
+  | "fixing_security"
+  | "testing"
+  | "fixing_tests"
+  | "done"
+  | "failed";
+
+export interface BuildProgress {
+  status: BuildProgressStatus;
+  iteration: number;
+  maxIterations: number;
+  message: string;
+  logs: string[];
+}
+
+export interface BuildResult {
+  success: boolean;
+  code?: GeneratedCode;
+  testResult?: TestResult;
+  securityWarnings?: { severity: string; message: string; contract?: string; line?: number }[];
+  logs: string[];
+  iterations: number;
+  elapsedMs?: number;
+  error?: string;
+  compileErrors?: string[];
+}
+
 export interface BuilderState {
   // Current step
   step: BuilderStep;
@@ -153,6 +185,13 @@ export interface BuilderState {
   loadingMessage: string;
   setLoadingMessage: (message: string) => void;
 
+  // Auto build mode
+  autoMode: boolean;
+  setAutoMode: (autoMode: boolean) => void;
+  buildProgress: BuildProgress | null;
+  setBuildProgress: (progress: BuildProgress | null) => void;
+  appendBuildLog: (log: string) => void;
+
   // Project management
   currentProjectId: string | null;
   setCurrentProjectId: (id: string | null) => void;
@@ -189,6 +228,8 @@ const initialBuilderState = {
   vercelDeployment: null as { url: string; projectId: string } | null,
   isLoading: false,
   loadingMessage: "",
+  autoMode: false,
+  buildProgress: null as BuildProgress | null,
   currentProjectId: null as string | null,
   isEditMode: false,
 };
@@ -216,6 +257,14 @@ export const useBuilderStore = create<BuilderState>()(
       setVercelDeployment: (vercelDeployment) => set({ vercelDeployment }),
       setIsLoading: (isLoading) => set({ isLoading }),
       setLoadingMessage: (loadingMessage) => set({ loadingMessage }),
+      setAutoMode: (autoMode) => set({ autoMode }),
+      setBuildProgress: (buildProgress) => set({ buildProgress }),
+      appendBuildLog: (log) =>
+        set((state) => ({
+          buildProgress: state.buildProgress
+            ? { ...state.buildProgress, logs: [...state.buildProgress.logs, log] }
+            : null,
+        })),
       setCurrentProjectId: (currentProjectId) => set({ currentProjectId }),
       setIsEditMode: (isEditMode) => set({ isEditMode }),
 

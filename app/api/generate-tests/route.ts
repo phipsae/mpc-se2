@@ -5,9 +5,9 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
-const GENERATE_TESTS_PROMPT = `You are an expert Solidity developer specializing in writing comprehensive smart contract tests.
+const GENERATE_TESTS_PROMPT = `You are an expert Solidity developer specializing in writing comprehensive Foundry/Forge tests.
 
-Your task is to generate thorough unit tests for the provided Solidity contract(s) using Hardhat, Chai, and ethers.js v6.
+Your task is to generate thorough unit tests for the provided Solidity contract(s) using Foundry/Forge.
 
 ## TEST REQUIREMENTS:
 - Test all public and external functions
@@ -16,53 +16,65 @@ Your task is to generate thorough unit tests for the provided Solidity contract(
 - Test events are emitted correctly
 - Test state changes
 - Include deployment tests
-- Use loadFixture pattern for gas efficiency
+- Use fuzz testing where appropriate
 
-## TEST FILE STRUCTURE:
-\`\`\`typescript
-import { expect } from "chai";
-import { ethers } from "hardhat";
-import { loadFixture } from "@nomicfoundation/hardhat-network-helpers";
+## FOUNDRY TEST FILE STRUCTURE:
+\`\`\`solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
 
-describe("ContractName", function () {
-  async function deployFixture() {
-    const [owner, addr1, addr2] = await ethers.getSigners();
-    const Contract = await ethers.getContractFactory("ContractName");
-    const contract = await Contract.deploy(/* constructor args */);
-    return { contract, owner, addr1, addr2 };
-  }
+import "forge-std/Test.sol";
+import "../src/ContractName.sol";
 
-  describe("Deployment", function () {
-    it("Should deploy successfully", async function () {
-      const { contract } = await loadFixture(deployFixture);
-      expect(await contract.getAddress()).to.be.properAddress;
-    });
-  });
+contract ContractNameTest is Test {
+    ContractName public instance;
+    address public owner;
+    address public user1;
+    address public user2;
 
-  describe("FunctionName", function () {
-    it("Should do X when Y", async function () {
-      // Test implementation
-    });
+    function setUp() public {
+        owner = address(this);
+        user1 = makeAddr("user1");
+        user2 = makeAddr("user2");
+        
+        instance = new ContractName(/* constructor args */);
+    }
 
-    it("Should revert when Z", async function () {
-      // Test error conditions
-    });
-  });
-});
+    function testDeployment() public view {
+        assertEq(instance.owner(), owner);
+    }
+
+    function testUnauthorizedAccess() public {
+        vm.prank(user1);
+        vm.expectRevert();
+        instance.ownerOnlyFunction();
+    }
+
+    function testFuzz_SomeFunction(uint256 amount) public {
+        vm.assume(amount > 0 && amount < 1e18);
+        // fuzz test
+    }
+}
 \`\`\`
 
-## IMPORTANT NOTES FOR ETHERS V6:
-- Use \`await contract.getAddress()\` instead of \`contract.address\`
-- Use \`ethers.parseEther("1.0")\` instead of \`ethers.utils.parseEther\`
-- Use \`ethers.formatEther()\` instead of \`ethers.utils.formatEther\`
-- BigInt is native, no need for BigNumber
+## IMPORTANT FOUNDRY CONVENTIONS:
+- Import "forge-std/Test.sol" for testing utilities
+- Contract must inherit from Test
+- Use setUp() for initialization
+- Test functions must start with "test" or "testFuzz_" or "testFail_"
+- Use vm.prank(addr) to impersonate addresses
+- Use vm.expectRevert() before calls that should revert
+- Use makeAddr("name") to create test addresses
+- Use deal(addr, amount) to give ETH to addresses
+- Use assertEq, assertTrue, assertFalse for assertions
+- Use vm.expectEmit() for event testing
 
 ## OUTPUT FORMAT:
 You MUST output your response in this EXACT format:
 
----TEST: ContractName.test.ts---
-\`\`\`typescript
-// Full test code here
+---TEST: ContractName.t.sol---
+\`\`\`solidity
+// Full Foundry test code here
 \`\`\`
 
 Generate a test file for EACH contract provided.`;
@@ -106,29 +118,37 @@ Create thorough tests that cover all functionality. Use the exact output format 
 
     const responseText = textContent.text;
 
-    // Parse tests from ---TEST: name.test.ts--- markers
+    // Parse tests from ---TEST: name.t.sol--- markers (Foundry tests)
     const tests: { name: string; content: string }[] = [];
     const testMatches = responseText.matchAll(
-      /---TEST:\s*([^\n-]+)---\s*```(?:typescript|ts)?\s*([\s\S]*?)```/gi
+      /---TEST:\s*([^\n-]+)---\s*```(?:solidity|typescript|ts)?\s*([\s\S]*?)```/gi
     );
     for (const match of testMatches) {
+      let testName = match[1].trim();
+      // Ensure .t.sol extension for Foundry tests
+      if (!testName.endsWith('.t.sol')) {
+        testName = testName.replace(/\.(sol|ts|test\.ts)$/, '') + '.t.sol';
+      }
       tests.push({
-        name: match[1].trim(),
+        name: testName,
         content: match[2].trim(),
       });
     }
 
-    // Fallback: try to find any typescript code blocks
+    // Fallback: try to find any solidity code blocks that look like tests
     if (tests.length === 0) {
-      const tsBlocks = responseText.matchAll(/```(?:typescript|ts)\s*([\s\S]*?)```/gi);
+      const solBlocks = responseText.matchAll(/```(?:solidity)\s*([\s\S]*?)```/gi);
       let i = 0;
-      for (const match of tsBlocks) {
-        const originalName = contracts[i]?.name?.replace(".sol", "") || `Contract${i}`;
-        tests.push({
-          name: `${originalName}.test.ts`,
-          content: match[1].trim(),
-        });
-        i++;
+      for (const match of solBlocks) {
+        // Only include if it looks like a test (imports Test.sol)
+        if (match[1].includes('forge-std/Test.sol') || match[1].includes('is Test')) {
+          const originalName = contracts[i]?.name?.replace(".sol", "") || `Contract${i}`;
+          tests.push({
+            name: `${originalName}.t.sol`,
+            content: match[1].trim(),
+          });
+          i++;
+        }
       }
     }
 
@@ -137,7 +157,7 @@ Create thorough tests that cover all functionality. Use the exact output format 
       for (const contract of contracts) {
         const contractName = contract.name.replace(".sol", "");
         tests.push({
-          name: `${contractName}.test.ts`,
+          name: `${contractName}.t.sol`,
           content: generateBasicTest(contractName, contract.content),
         });
       }
@@ -161,30 +181,37 @@ function generateBasicTest(contractName: string, contractCode: string): string {
   const constructorMatch = contractCode.match(/constructor\s*\(([^)]*)\)/);
   const hasConstructorParams = constructorMatch && constructorMatch[1].trim().length > 0;
 
-  return `import { expect } from "chai";
-import { ethers } from "hardhat";
-import { loadFixture } from "@nomicfoundation/hardhat-network-helpers";
+  return `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
 
-describe("${contractName}", function () {
-  async function deployFixture() {
-    const [owner, addr1, addr2] = await ethers.getSigners();
-    const Contract = await ethers.getContractFactory("${contractName}");
-    const contract = await Contract.deploy(${hasConstructorParams ? "/* add constructor args */" : ""});
-    return { contract, owner, addr1, addr2 };
-  }
+import "forge-std/Test.sol";
+import "../src/${contractName}.sol";
 
-  describe("Deployment", function () {
-    it("Should deploy successfully", async function () {
-      const { contract } = await loadFixture(deployFixture);
-      expect(await contract.getAddress()).to.be.properAddress;
-    });
+contract ${contractName}Test is Test {
+    ${contractName} public instance;
+    address public owner;
+    address public user1;
+
+    function setUp() public {
+        owner = address(this);
+        user1 = makeAddr("user1");
+        instance = new ${contractName}(${hasConstructorParams ? "/* add constructor args */" : ""});
+    }
+
+    function testDeployment() public view {
+        assertTrue(address(instance) != address(0));
+    }
 ${hasOwnable ? `
-    it("Should set the right owner", async function () {
-      const { contract, owner } = await loadFixture(deployFixture);
-      expect(await contract.owner()).to.equal(owner.address);
-    });
+    function testOwner() public view {
+        assertEq(instance.owner(), owner);
+    }
+
+    function testUnauthorizedAccess() public {
+        vm.prank(user1);
+        vm.expectRevert();
+        // Call an owner-only function here
+    }
 ` : ""}
-  });
-});
+}
 `;
 }

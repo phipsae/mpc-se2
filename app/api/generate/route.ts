@@ -13,32 +13,39 @@ function generateFallbackTest(contractName: string, contractCode: string): strin
   // Check if it has Ownable
   const hasOwnable = contractCode.includes("Ownable") || contractCode.includes("owner()");
 
-  // Generate basic test structure
-  return `import { expect } from "chai";
-import { ethers } from "hardhat";
-import { loadFixture } from "@nomicfoundation/hardhat-network-helpers";
+  // Generate basic Foundry test structure
+  return `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
 
-describe("${contractName}", function () {
-  async function deployFixture() {
-    const [owner, otherAccount] = await ethers.getSigners();
-    const Contract = await ethers.getContractFactory("${contractName}");
-    const contract = await Contract.deploy(${hasConstructorParams ? "/* add constructor args */" : ""});
-    return { contract, owner, otherAccount };
-  }
+import "forge-std/Test.sol";
+import "../src/${contractName}.sol";
 
-  describe("Deployment", function () {
-    it("Should deploy successfully", async function () {
-      const { contract } = await loadFixture(deployFixture);
-      expect(await contract.getAddress()).to.be.properAddress;
-    });
+contract ${contractName}Test is Test {
+    ${contractName} public instance;
+    address public owner;
+    address public user1;
+
+    function setUp() public {
+        owner = address(this);
+        user1 = makeAddr("user1");
+        instance = new ${contractName}(${hasConstructorParams ? "/* add constructor args */" : ""});
+    }
+
+    function testDeployment() public view {
+        assertTrue(address(instance) != address(0));
+    }
 ${hasOwnable ? `
-    it("Should set the right owner", async function () {
-      const { contract, owner } = await loadFixture(deployFixture);
-      expect(await contract.owner()).to.equal(owner.address);
-    });
+    function testOwner() public view {
+        assertEq(instance.owner(), owner);
+    }
+
+    function testUnauthorizedAccess() public {
+        vm.prank(user1);
+        vm.expectRevert();
+        // Call an owner-only function here
+    }
 ` : ""}
-  });
-});
+}
 `;
 }
 
@@ -85,37 +92,49 @@ KEY SE2 PATTERNS TO USE:
 - Use TailwindCSS and daisyUI for styling
 
 ## TEST REQUIREMENTS:
-You MUST also generate comprehensive unit tests for each contract using Hardhat, Chai, and ethers.js v6:
+You MUST also generate comprehensive Foundry/Forge unit tests for each contract:
 - Test all public functions
 - Test access control (onlyOwner, etc.)
 - Test edge cases and error conditions
 - Test events are emitted correctly
-- Include gas usage comments where relevant
+- Use fuzz testing where appropriate
 
-Test file structure:
-\`\`\`typescript
-import { expect } from "chai";
-import { ethers } from "hardhat";
-import { loadFixture } from "@nomicfoundation/hardhat-network-helpers";
+Foundry test file structure:
+\`\`\`solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
 
-describe("ContractName", function () {
-  async function deployFixture() {
-    const [owner, otherAccount] = await ethers.getSigners();
-    const Contract = await ethers.getContractFactory("ContractName");
-    const contract = await Contract.deploy(/* constructor args */);
-    return { contract, owner, otherAccount };
-  }
+import "forge-std/Test.sol";
+import "../src/ContractName.sol";
 
-  describe("Deployment", function () {
-    it("Should set the right owner", async function () {
-      const { contract, owner } = await loadFixture(deployFixture);
-      expect(await contract.owner()).to.equal(owner.address);
-    });
-  });
+contract ContractNameTest is Test {
+    ContractName public instance;
+    address public owner;
+    address public user1;
 
-  // More test cases...
-});
+    function setUp() public {
+        owner = address(this);
+        user1 = makeAddr("user1");
+        instance = new ContractName(/* constructor args */);
+    }
+
+    function testDeployment() public view {
+        assertEq(instance.owner(), owner);
+    }
+
+    function testUnauthorizedAccess() public {
+        vm.prank(user1);
+        vm.expectRevert();
+        instance.ownerOnlyFunction();
+    }
+}
 \`\`\`
+
+Foundry conventions:
+- Import "forge-std/Test.sol" and inherit from Test
+- Use vm.prank(addr) to impersonate, vm.expectRevert() for reverts
+- Use makeAddr("name") for addresses, deal(addr, amount) for ETH
+- Test functions must start with "test"
 
 ## OUTPUT FORMAT:
 You MUST output your response in this EXACT format using code fence markers:
@@ -130,9 +149,9 @@ You MUST output your response in this EXACT format using code fence markers:
 // Full React component code here
 \`\`\`
 
----TEST: ContractName.test.ts---
-\`\`\`typescript
-// Full test code here
+---TEST: ContractName.t.sol---
+\`\`\`solidity
+// Full Foundry test code here
 \`\`\`
 
 You can include multiple contracts, pages, and test files. Each must be preceded by the marker line.`;
@@ -213,12 +232,17 @@ Generate the complete Solidity contract(s) and React page(s).`;
       });
     }
 
-    // Parse tests from ---TEST: name.test.ts--- markers
+    // Parse tests from ---TEST: name.t.sol--- markers (Foundry tests)
     const tests: { name: string; content: string }[] = [];
-    const testMatches = responseText.matchAll(/---TEST:\s*([^\n-]+)---\s*```(?:typescript|ts)?\s*([\s\S]*?)```/gi);
+    const testMatches = responseText.matchAll(/---TEST:\s*([^\n-]+)---\s*```(?:solidity|typescript|ts)?\s*([\s\S]*?)```/gi);
     for (const match of testMatches) {
+      let testName = match[1].trim();
+      // Ensure .t.sol extension for Foundry tests
+      if (!testName.endsWith('.t.sol')) {
+        testName = testName.replace(/\.(sol|ts|test\.ts)$/, '') + '.t.sol';
+      }
       tests.push({
-        name: match[1].trim(),
+        name: testName,
         content: match[2].trim(),
       });
     }
@@ -253,9 +277,9 @@ Generate the complete Solidity contract(s) and React page(s).`;
       throw new Error("Could not extract any code from Claude's response");
     }
 
-    // Generate fallback tests if none were generated
+    // Generate fallback tests if none were generated (Foundry format)
     const finalTests = tests.length > 0 ? tests : contracts.map((contract) => ({
-      name: `${contract.name.replace(".sol", "")}.test.ts`,
+      name: `${contract.name.replace(".sol", "")}.t.sol`,
       content: generateFallbackTest(contract.name.replace(".sol", ""), contract.content),
     }));
 

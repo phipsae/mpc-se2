@@ -10,9 +10,10 @@ import {
   Terminal,
   ChevronDown,
   ChevronRight,
+  AlertCircle,
 } from "lucide-react";
 import { useBuilderStore } from "@/lib/store";
-import { runTests } from "@/lib/webcontainer";
+import { runTests, isTestRunnerConfigured } from "@/lib/test-runner";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -30,7 +31,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 
-type TestingStatus = "idle" | "booting" | "installing" | "running" | "done";
+type TestingStatus = "idle" | "connecting" | "running" | "done";
 
 export function TestingStep() {
   const {
@@ -62,7 +63,7 @@ export function TestingStep() {
       return;
     }
 
-    setStatus("booting");
+    setStatus("connecting");
     setTestOutput("");
     setTestResult(null);
 
@@ -73,9 +74,7 @@ export function TestingStep() {
         (data) => {
           appendTestOutput(data);
           // Update status based on output
-          if (data.includes("Installing dependencies")) {
-            setStatus("installing");
-          } else if (data.includes("Running tests")) {
+          if (data.includes("Running tests")) {
             setStatus("running");
           }
         }
@@ -85,16 +84,7 @@ export function TestingStep() {
       setStatus("done");
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "Test execution failed";
-
-      // Provide helpful messages for common WebContainer errors
-      let helpMessage = "";
-      if (errorMessage.includes("crossOriginIsolated") || errorMessage.includes("SharedArrayBuffer")) {
-        helpMessage = "\n\nThis error requires Cross-Origin Isolation headers. Please restart the dev server and refresh the page.";
-      } else if (errorMessage.includes("Unable to create more instances")) {
-        helpMessage = "\n\nPlease refresh the page to reset the WebContainer instance.";
-      }
-
-      appendTestOutput(`\nError: ${errorMessage}${helpMessage}\n`);
+      appendTestOutput(`\nError: ${errorMessage}\n`);
       setTestResult({
         success: false,
         totalTests: 0,
@@ -119,10 +109,8 @@ export function TestingStep() {
 
   const getStatusMessage = () => {
     switch (status) {
-      case "booting":
-        return "Booting WebContainer...";
-      case "installing":
-        return "Installing dependencies...";
+      case "connecting":
+        return "Connecting to test service...";
       case "running":
         return "Running tests...";
       case "done":
@@ -132,8 +120,8 @@ export function TestingStep() {
     }
   };
 
-  const isRunning =
-    status === "booting" || status === "installing" || status === "running";
+  const isRunning = status === "connecting" || status === "running";
+  const testRunnerConfigured = isTestRunnerConfigured();
   const canDeploy = testResult?.success || acknowledgedSkip;
 
   const handleGenerateTests = async () => {
@@ -240,9 +228,22 @@ export function TestingStep() {
       <div className="text-center">
         <h1 className="text-3xl font-bold mb-2">Smart Contract Testing</h1>
         <p className="text-muted-foreground">
-          Run unit tests in your browser using WebContainers
+          Run unit tests using the remote Hardhat test service
         </p>
       </div>
+
+      {/* Warning if test runner not configured */}
+      {!testRunnerConfigured && (
+        <Alert>
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>Test Runner Not Configured</AlertTitle>
+          <AlertDescription>
+            The remote test runner service is not configured. Set{" "}
+            <code className="bg-muted px-1 rounded">NEXT_PUBLIC_TEST_RUNNER_URL</code>{" "}
+            in your environment variables. You can skip tests and deploy, then test locally.
+          </AlertDescription>
+        </Alert>
+      )}
 
       {/* Status Card */}
       <Card>
@@ -271,7 +272,7 @@ export function TestingStep() {
           <div className="flex items-center gap-4">
             <Button
               onClick={handleRunTests}
-              disabled={isRunning}
+              disabled={isRunning || !testRunnerConfigured}
               className="gap-2"
             >
               {isRunning ? (
@@ -280,11 +281,9 @@ export function TestingStep() {
                 <Play className="h-4 w-4" />
               )}
               {isRunning
-                ? status === "booting"
-                  ? "Booting..."
-                  : status === "installing"
-                    ? "Installing..."
-                    : "Running..."
+                ? status === "connecting"
+                  ? "Connecting..."
+                  : "Running..."
                 : testResult
                   ? "Run Again"
                   : "Run Tests"}
@@ -294,14 +293,9 @@ export function TestingStep() {
             {isRunning && (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <span
-                  className={`w-2 h-2 rounded-full ${status === "booting" ? "bg-primary animate-pulse" : "bg-green-500"}`}
+                  className={`w-2 h-2 rounded-full ${status === "connecting" ? "bg-primary animate-pulse" : "bg-green-500"}`}
                 />
-                Boot
-                <span className="text-muted-foreground/50">→</span>
-                <span
-                  className={`w-2 h-2 rounded-full ${status === "installing" ? "bg-primary animate-pulse" : status === "running" ? "bg-green-500" : "bg-muted-foreground/30"}`}
-                />
-                Install
+                Connect
                 <span className="text-muted-foreground/50">→</span>
                 <span
                   className={`w-2 h-2 rounded-full ${status === "running" ? "bg-primary animate-pulse" : "bg-muted-foreground/30"}`}
