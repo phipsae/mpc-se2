@@ -5,10 +5,12 @@ import { useBuilderStore } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 
 export function PromptStep() {
   const { prompt, setPrompt, setStep, setQuestions, setPlan, setIsLoading, setLoadingMessage } = useBuilderStore();
   const [localPrompt, setLocalPrompt] = useState(prompt);
+  const [error, setError] = useState<string | null>(null);
 
   const handleAnalyze = async () => {
     if (!localPrompt.trim()) return;
@@ -16,6 +18,7 @@ export function PromptStep() {
     setPrompt(localPrompt);
     setIsLoading(true);
     setLoadingMessage("Analyzing your request...");
+    setError(null);
 
     try {
       const response = await fetch("/api/analyze", {
@@ -26,18 +29,22 @@ export function PromptStep() {
 
       const data = await response.json();
 
-      if (data.status === "needs_clarification") {
+      if (data.error) {
+        setError(data.error);
+      } else if (data.status === "needs_clarification") {
         setQuestions(data.questions);
         setStep("clarification");
       } else if (data.status === "ready") {
         setPlan(data.plan);
         setStep("plan");
       } else {
-        // Handle error
+        // Handle unexpected response
         console.error("Unexpected response:", data);
+        setError("Received an unexpected response from the AI. Please try again.");
       }
     } catch (error) {
       console.error("Error analyzing prompt:", error);
+      setError("Failed to analyze your request. Please check your connection and try again.");
     } finally {
       setIsLoading(false);
       setLoadingMessage("");
@@ -52,6 +59,12 @@ export function PromptStep() {
           Describe your dApp in detail. The more specific, the better.
         </p>
       </div>
+
+      {error && (
+        <Alert variant="destructive">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
 
       <Card>
         <CardHeader>

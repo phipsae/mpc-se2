@@ -1,25 +1,82 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { useAccount } from "wagmi";
+import { ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { useBuilderStore } from "@/lib/store";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useBuilderStore, SavedProject } from "@/lib/store";
 import { useAuthConnections } from "@/lib/auth/use-auth-connections";
 import { ProjectCard } from "@/components/project-card";
+
+type ProjectFilter = "all" | "drafts" | "deployed";
 
 export default function Home() {
   const router = useRouter();
   const { isConnected } = useAccount();
   const [prompt, setPrompt] = useState("");
   const [vercelTokenInput, setVercelTokenInput] = useState("");
-  const { setPrompt: setStorePrompt, setStep, savedProjects, reset } = useBuilderStore();
+  const [projectFilter, setProjectFilter] = useState<ProjectFilter>("all");
+  const {
+    setPrompt: setStorePrompt,
+    setStep,
+    savedProjects,
+    reset,
+    currentProjectId,
+    step: currentStep,
+    loadProjectAtStep,
+  } = useBuilderStore();
+
+  // Check if there's an in-progress session (not at prompt or results step)
+  const hasInProgressSession = useMemo(() => {
+    return (
+      currentProjectId &&
+      currentStep !== "prompt" &&
+      currentStep !== "results"
+    );
+  }, [currentProjectId, currentStep]);
+
+  // Get the in-progress project details
+  const inProgressProject = useMemo(() => {
+    if (!hasInProgressSession || !currentProjectId) return null;
+    return savedProjects.find((p) => p.id === currentProjectId);
+  }, [hasInProgressSession, currentProjectId, savedProjects]);
+
+  // Helper to get project status (handles legacy projects without status field)
+  const getProjectStatus = (p: SavedProject): "draft" | "deployed" => {
+    // If status is set, use it; otherwise infer from deployment
+    if (p.status) return p.status;
+    return p.deployment ? "deployed" : "draft";
+  };
+
+  // Filter projects based on selected tab
+  const filteredProjects = useMemo(() => {
+    switch (projectFilter) {
+      case "drafts":
+        return savedProjects.filter((p) => getProjectStatus(p) === "draft");
+      case "deployed":
+        return savedProjects.filter((p) => getProjectStatus(p) === "deployed");
+      default:
+        return savedProjects;
+    }
+  }, [savedProjects, projectFilter]);
+
+  // Count projects by status
+  const draftCount = useMemo(
+    () => savedProjects.filter((p) => getProjectStatus(p) === "draft").length,
+    [savedProjects]
+  );
+  const deployedCount = useMemo(
+    () => savedProjects.filter((p) => getProjectStatus(p) === "deployed").length,
+    [savedProjects]
+  );
 
   // Auth connections
   const {
@@ -44,6 +101,10 @@ export default function Home() {
     reset(); // Clear any previous project state
     setStorePrompt(prompt);
     setStep("prompt");
+    router.push("/builder");
+  };
+
+  const handleContinueSession = () => {
     router.push("/builder");
   };
 
@@ -174,6 +235,33 @@ export default function Home() {
           </CardContent>
         </Card>
 
+        {/* Resume In-Progress Session Banner */}
+        {hasInProgressSession && (
+          <Card className="w-full mb-6 border-primary/50 bg-primary/5">
+            <CardContent className="py-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">
+                    <span className="text-lg">📝</span>
+                  </div>
+                  <div>
+                    <p className="font-medium">
+                      Continue: {inProgressProject?.name || "Your dApp"}
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      You have an in-progress project at step: {currentStep}
+                    </p>
+                  </div>
+                </div>
+                <Button onClick={handleContinueSession}>
+                  Continue
+                  <ArrowRight className="h-4 w-4 ml-2" />
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Prompt Input */}
         <Card className="w-full">
           <CardHeader>
@@ -233,12 +321,41 @@ export default function Home() {
           <>
             <Separator className="my-8" />
             <div className="w-full">
-              <h2 className="text-xl font-semibold mb-4">Your Projects</h2>
-              <div className="grid gap-4 sm:grid-cols-2">
-                {savedProjects.map((project) => (
-                  <ProjectCard key={project.id} project={project} />
-                ))}
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-xl font-semibold">Your Projects</h2>
+                <Tabs value={projectFilter} onValueChange={(v) => setProjectFilter(v as ProjectFilter)}>
+                  <TabsList className="h-8">
+                    <TabsTrigger value="all" className="text-xs px-3">
+                      All ({savedProjects.length})
+                    </TabsTrigger>
+                    <TabsTrigger value="drafts" className="text-xs px-3">
+                      Drafts {draftCount > 0 && (
+                        <Badge variant="secondary" className="ml-1 h-5 px-1.5 text-xs">
+                          {draftCount}
+                        </Badge>
+                      )}
+                    </TabsTrigger>
+                    <TabsTrigger value="deployed" className="text-xs px-3">
+                      Deployed {deployedCount > 0 && (
+                        <Badge variant="secondary" className="ml-1 h-5 px-1.5 text-xs bg-green-600/20 text-green-600">
+                          {deployedCount}
+                        </Badge>
+                      )}
+                    </TabsTrigger>
+                  </TabsList>
+                </Tabs>
               </div>
+              {filteredProjects.length > 0 ? (
+                <div className="grid gap-4 sm:grid-cols-2">
+                  {filteredProjects.map((project) => (
+                    <ProjectCard key={project.id} project={project} />
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-8 text-muted-foreground">
+                  No {projectFilter === "all" ? "" : projectFilter} projects found.
+                </div>
+              )}
             </div>
           </>
         )}

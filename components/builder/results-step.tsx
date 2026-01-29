@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
+import { Pencil, Code, Layout } from "lucide-react";
 import { useBuilderStore } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,7 +10,18 @@ import { Separator } from "@/components/ui/separator";
 
 export function ResultsStep() {
   const router = useRouter();
-  const { deployment, githubRepo, vercelDeployment, reset, saveCurrentProject } = useBuilderStore();
+  const {
+    deployment,
+    githubRepo,
+    vercelDeployment,
+    reset,
+    saveCurrentProject,
+    setStep,
+    setIsEditMode,
+    setCheckResult,
+    setTestResult,
+    plan,
+  } = useBuilderStore();
   const hasSaved = useRef(false);
 
   // Auto-save the project when reaching results
@@ -23,6 +35,14 @@ export function ResultsStep() {
   const handleStartOver = () => {
     reset();
     router.push("/");
+  };
+
+  const handleEditCode = () => {
+    // Clear previous check/test results for re-verification
+    setCheckResult(null);
+    setTestResult(null);
+    setIsEditMode(true);
+    setStep("preview");
   };
 
   const copyToClipboard = (text: string) => {
@@ -169,6 +189,41 @@ export function ResultsStep() {
           </CardContent>
         </Card>
       )}
+
+      <Separator />
+
+      {/* Edit & Modify Section */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Pencil className="h-5 w-5" />
+            Edit & Modify
+          </CardTitle>
+          <CardDescription>
+            Make changes to your dApp with AI assistance and redeploy
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Need to make changes? Edit your smart contract or frontend code, then
+            recompile, test, and deploy a new version.
+          </p>
+          <div className="flex flex-wrap gap-3">
+            <Button variant="outline" onClick={handleEditCode}>
+              <Code className="h-4 w-4 mr-2" />
+              Edit Contract Code
+            </Button>
+            <Button variant="outline" onClick={handleEditCode}>
+              <Layout className="h-4 w-4 mr-2" />
+              Edit Frontend Code
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Note: Deploying changes will create a new contract with a new address.
+            The original contract will remain unchanged on the blockchain.
+          </p>
+        </CardContent>
+      </Card>
 
       <Separator />
 

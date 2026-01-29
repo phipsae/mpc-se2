@@ -1,14 +1,15 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
-import { useBuilderStore } from "@/lib/store";
+import { useBuilderStore, BuilderStep } from "@/lib/store";
 import { PromptStep } from "@/components/builder/prompt-step";
 import { ClarificationStep } from "@/components/builder/clarification-step";
 import { PlanStep } from "@/components/builder/plan-step";
 import { PreviewStep } from "@/components/builder/preview-step";
 import { ChecksStep } from "@/components/builder/checks-step";
+import { TestingStep } from "@/components/builder/testing-step";
 import { DeployStep } from "@/components/builder/deploy-step";
 import { ResultsStep } from "@/components/builder/results-step";
 import { Progress } from "@/components/ui/progress";
@@ -20,22 +21,45 @@ const STEPS = [
   { id: "generate", label: "Generate", number: 4 },
   { id: "preview", label: "Preview", number: 4 },
   { id: "checks", label: "Checks", number: 5 },
-  { id: "deploy", label: "Deploy", number: 6 },
-  { id: "github", label: "GitHub", number: 7 },
-  { id: "vercel", label: "Vercel", number: 8 },
-  { id: "results", label: "Done", number: 9 },
+  { id: "testing", label: "Testing", number: 6 },
+  { id: "deploy", label: "Deploy", number: 7 },
+  { id: "github", label: "GitHub", number: 8 },
+  { id: "vercel", label: "Vercel", number: 9 },
+  { id: "results", label: "Done", number: 10 },
+];
+
+// Steps that trigger auto-save (save progress after meaningful work)
+const AUTO_SAVE_STEPS: BuilderStep[] = [
+  "clarification",
+  "plan",
+  "preview",
+  "checks",
+  "testing",
+  "deploy",
+  "github",
+  "vercel",
 ];
 
 export default function BuilderPage() {
   const router = useRouter();
-  const { step, prompt, isLoading, loadingMessage } = useBuilderStore();
+  const { step, prompt, isLoading, loadingMessage, saveDraft, isEditMode } = useBuilderStore();
+  const previousStep = useRef<BuilderStep | null>(null);
 
-  // Redirect if no prompt
+  // Auto-save draft when moving to significant steps
   useEffect(() => {
-    if (!prompt && step === "prompt") {
-      // Allow staying on prompt step to enter new prompt
+    // Don't auto-save if no prompt yet or in edit mode (editing deployed project)
+    if (!prompt || isEditMode) return;
+
+    // Only save when step changes to a save-worthy step
+    if (
+      AUTO_SAVE_STEPS.includes(step) &&
+      previousStep.current !== step
+    ) {
+      saveDraft();
     }
-  }, [prompt, step, router]);
+
+    previousStep.current = step;
+  }, [step, prompt, saveDraft, isEditMode]);
 
   const currentStepIndex = STEPS.findIndex((s) => s.id === step);
   const progress = ((currentStepIndex + 1) / STEPS.length) * 100;
@@ -53,6 +77,8 @@ export default function BuilderPage() {
         return <PreviewStep />;
       case "checks":
         return <ChecksStep />;
+      case "testing":
+        return <TestingStep />;
       case "deploy":
       case "github":
       case "vercel":

@@ -60,6 +60,13 @@ ONLY return valid JSON, no other text.`;
 
 export async function POST(request: NextRequest) {
   try {
+    if (!process.env.ANTHROPIC_API_KEY) {
+      return NextResponse.json(
+        { error: "ANTHROPIC_API_KEY is not configured. Please add it to your .env file." },
+        { status: 500 }
+      );
+    }
+
     const body = await request.json();
     const { prompt, answers, isFollowUp } = body;
 
@@ -96,7 +103,7 @@ export async function POST(request: NextRequest) {
 
     // Parse the JSON response
     const responseText = textContent.text.trim();
-    
+
     // Try to extract JSON from the response
     let jsonResponse;
     try {
@@ -110,6 +117,20 @@ export async function POST(request: NextRequest) {
       } else {
         throw new Error("Could not parse response as JSON");
       }
+    }
+
+    // Validate the response has the expected structure
+    if (!jsonResponse.status) {
+      console.error("Invalid response structure:", jsonResponse);
+      throw new Error("AI returned an invalid response format. Please try again.");
+    }
+
+    if (jsonResponse.status === "needs_clarification" && !jsonResponse.questions) {
+      throw new Error("AI response missing clarification questions.");
+    }
+
+    if (jsonResponse.status === "ready" && !jsonResponse.plan) {
+      throw new Error("AI response missing project plan.");
     }
 
     return NextResponse.json(jsonResponse);

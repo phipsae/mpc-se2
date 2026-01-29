@@ -5,6 +5,43 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
+function generateFallbackTest(contractName: string, contractCode: string): string {
+  // Extract constructor parameters from the contract code
+  const constructorMatch = contractCode.match(/constructor\s*\(([^)]*)\)/);
+  const hasConstructorParams = constructorMatch && constructorMatch[1].trim().length > 0;
+
+  // Check if it has Ownable
+  const hasOwnable = contractCode.includes("Ownable") || contractCode.includes("owner()");
+
+  // Generate basic test structure
+  return `import { expect } from "chai";
+import { ethers } from "hardhat";
+import { loadFixture } from "@nomicfoundation/hardhat-network-helpers";
+
+describe("${contractName}", function () {
+  async function deployFixture() {
+    const [owner, otherAccount] = await ethers.getSigners();
+    const Contract = await ethers.getContractFactory("${contractName}");
+    const contract = await Contract.deploy(${hasConstructorParams ? "/* add constructor args */" : ""});
+    return { contract, owner, otherAccount };
+  }
+
+  describe("Deployment", function () {
+    it("Should deploy successfully", async function () {
+      const { contract } = await loadFixture(deployFixture);
+      expect(await contract.getAddress()).to.be.properAddress;
+    });
+${hasOwnable ? `
+    it("Should set the right owner", async function () {
+      const { contract, owner } = await loadFixture(deployFixture);
+      expect(await contract.owner()).to.equal(owner.address);
+    });
+` : ""}
+  });
+});
+`;
+}
+
 // Cache for SE2 docs
 let se2DocsCache: string | null = null;
 
@@ -47,6 +84,39 @@ KEY SE2 PATTERNS TO USE:
 - <EtherInput /> for ETH amount inputs
 - Use TailwindCSS and daisyUI for styling
 
+## TEST REQUIREMENTS:
+You MUST also generate comprehensive unit tests for each contract using Hardhat, Chai, and ethers.js v6:
+- Test all public functions
+- Test access control (onlyOwner, etc.)
+- Test edge cases and error conditions
+- Test events are emitted correctly
+- Include gas usage comments where relevant
+
+Test file structure:
+\`\`\`typescript
+import { expect } from "chai";
+import { ethers } from "hardhat";
+import { loadFixture } from "@nomicfoundation/hardhat-network-helpers";
+
+describe("ContractName", function () {
+  async function deployFixture() {
+    const [owner, otherAccount] = await ethers.getSigners();
+    const Contract = await ethers.getContractFactory("ContractName");
+    const contract = await Contract.deploy(/* constructor args */);
+    return { contract, owner, otherAccount };
+  }
+
+  describe("Deployment", function () {
+    it("Should set the right owner", async function () {
+      const { contract, owner } = await loadFixture(deployFixture);
+      expect(await contract.owner()).to.equal(owner.address);
+    });
+  });
+
+  // More test cases...
+});
+\`\`\`
+
 ## OUTPUT FORMAT:
 You MUST output your response in this EXACT format using code fence markers:
 
@@ -60,10 +130,22 @@ You MUST output your response in this EXACT format using code fence markers:
 // Full React component code here
 \`\`\`
 
-You can include multiple contracts and pages. Each must be preceded by the marker line.`;
+---TEST: ContractName.test.ts---
+\`\`\`typescript
+// Full test code here
+\`\`\`
+
+You can include multiple contracts, pages, and test files. Each must be preceded by the marker line.`;
 
 export async function POST(request: NextRequest) {
   try {
+    if (!process.env.ANTHROPIC_API_KEY) {
+      return NextResponse.json(
+        { success: false, error: "ANTHROPIC_API_KEY is not configured. Please add it to your .env file." },
+        { status: 500 }
+      );
+    }
+
     const body = await request.json();
     const { prompt, answers, plan } = body;
 
@@ -131,6 +213,16 @@ Generate the complete Solidity contract(s) and React page(s).`;
       });
     }
 
+    // Parse tests from ---TEST: name.test.ts--- markers
+    const tests: { name: string; content: string }[] = [];
+    const testMatches = responseText.matchAll(/---TEST:\s*([^\n-]+)---\s*```(?:typescript|ts)?\s*([\s\S]*?)```/gi);
+    for (const match of testMatches) {
+      tests.push({
+        name: match[1].trim(),
+        content: match[2].trim(),
+      });
+    }
+
     // Fallback: try to find any solidity code blocks
     if (contracts.length === 0) {
       const solidityBlocks = responseText.matchAll(/```solidity\s*([\s\S]*?)```/gi);
@@ -161,7 +253,13 @@ Generate the complete Solidity contract(s) and React page(s).`;
       throw new Error("Could not extract any code from Claude's response");
     }
 
-    const code = { contracts, pages };
+    // Generate fallback tests if none were generated
+    const finalTests = tests.length > 0 ? tests : contracts.map((contract) => ({
+      name: `${contract.name.replace(".sol", "")}.test.ts`,
+      content: generateFallbackTest(contract.name.replace(".sol", ""), contract.content),
+    }));
+
+    const code = { contracts, pages, tests: finalTests };
 
     return NextResponse.json({ success: true, code });
   } catch (error) {

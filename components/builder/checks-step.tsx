@@ -345,7 +345,7 @@ export function ChecksStep() {
                 {/* Progress Steps */}
                 {isFixing && (
                   <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <div className={`flex items-center gap-1 ${fixStatus === "analyzing" ? "text-primary font-medium" : fixStatus !== "analyzing" ? "text-green-600" : ""}`}>
+                    <div className={`flex items-center gap-1 ${fixStatus === "analyzing" ? "text-primary font-medium" : "text-green-600"}`}>
                       <span className={`w-2 h-2 rounded-full ${fixStatus === "analyzing" ? "bg-primary animate-pulse" : "bg-green-500"}`} />
                       Analyze
                     </div>
@@ -481,7 +481,7 @@ export function ChecksStep() {
                 {/* Progress Steps */}
                 {isFixingSecurity && (
                   <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <div className={`flex items-center gap-1 ${securityFixStatus === "analyzing" ? "text-primary font-medium" : securityFixStatus !== "analyzing" ? "text-green-600" : ""}`}>
+                    <div className={`flex items-center gap-1 ${securityFixStatus === "analyzing" ? "text-primary font-medium" : "text-green-600"}`}>
                       <span className={`w-2 h-2 rounded-full ${securityFixStatus === "analyzing" ? "bg-primary animate-pulse" : "bg-green-500"}`} />
                       Analyze
                     </div>
@@ -644,20 +644,20 @@ export function ChecksStep() {
           <div className="flex items-center justify-between">
             <div>
               <h4 className="font-medium">
-                {canDeploy ? "Ready to deploy!" : "Cannot deploy yet"}
+                {canDeploy ? "Ready for testing!" : "Cannot proceed yet"}
               </h4>
               <p className="text-sm text-muted-foreground">
                 {canDeploy
-                  ? "Your contract will be deployed to " + selectedNetworkInfo?.name
-                  : "Please fix the errors above before deploying"}
+                  ? "Run tests before deploying to " + selectedNetworkInfo?.name
+                  : "Please fix the errors above before proceeding"}
               </p>
             </div>
             <div className="flex gap-2">
               <Button variant="outline" onClick={() => setStep("preview")}>
                 ← Edit Code
               </Button>
-              <Button onClick={() => setStep("deploy")} disabled={!canDeploy}>
-                Deploy Contract →
+              <Button onClick={() => setStep("testing")} disabled={!canDeploy}>
+                Run Tests →
               </Button>
             </div>
           </div>

@@ -2,12 +2,14 @@
 
 import { useEffect, useState } from "react";
 import { useAccount, useWalletClient, usePublicClient } from "wagmi";
+import { AlertCircle } from "lucide-react";
 import { useBuilderStore } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 type DeploymentPhase = "contract" | "github" | "vercel" | "done";
 
@@ -34,6 +36,11 @@ export function DeployStep() {
     setVercelDeployment,
     setIsLoading,
     setLoadingMessage,
+    isEditMode,
+    setIsEditMode,
+    deployment: previousDeployment,
+    githubRepo: previousGithubRepo,
+    plan,
   } = useBuilderStore();
 
   const [currentPhase, setCurrentPhase] = useState<DeploymentPhase>("contract");
@@ -305,13 +312,16 @@ export function DeployStep() {
 
     try {
       // Show progress messages
+      const messages = [
+        "Creating Vercel project...",
+        "Connecting to GitHub repository...",
+        "Triggering deployment...",
+        "Building your dApp (this may take a few minutes)...",
+      ];
+      let messageIndex = 0;
       const messageInterval = setInterval(() => {
-        setLoadingMessage((prev) => {
-          if (prev.includes("Creating")) return "Connecting to GitHub repository...";
-          if (prev.includes("Connecting")) return "Triggering deployment...";
-          if (prev.includes("Triggering")) return "Building your dApp (this may take a few minutes)...";
-          return "Building your dApp (this may take a few minutes)...";
-        });
+        messageIndex = Math.min(messageIndex + 1, messages.length - 1);
+        setLoadingMessage(messages[messageIndex]);
       }, 8000);
 
       const response = await fetch("/api/vercel", {
@@ -331,6 +341,10 @@ export function DeployStep() {
         setVercelDeployment({ url: data.deploymentUrl, projectId: data.projectId });
         setPhaseStatus((prev) => ({ ...prev, vercel: "success" }));
         setCurrentPhase("done");
+        // Clear edit mode when deployment is complete
+        if (isEditMode) {
+          setIsEditMode(false);
+        }
         setStep("results");
       } else {
         throw new Error(data.error || "Failed to deploy to Vercel");
@@ -373,8 +387,26 @@ export function DeployStep() {
 
   return (
     <div className="space-y-6">
+      {/* Edit Mode Notice */}
+      {isEditMode && (
+        <Alert className="border-amber-500/50 bg-amber-500/5">
+          <AlertCircle className="h-4 w-4 text-amber-500" />
+          <AlertTitle className="text-amber-600">Redeployment Mode</AlertTitle>
+          <AlertDescription>
+            You are deploying modified code. This will create a <strong>new contract</strong> with a new address. 
+            {previousDeployment && (
+              <span className="block mt-1 text-xs">
+                Previous contract: {previousDeployment.contractAddress.slice(0, 10)}...{previousDeployment.contractAddress.slice(-8)}
+              </span>
+            )}
+          </AlertDescription>
+        </Alert>
+      )}
+
       <div className="text-center">
-        <h1 className="text-3xl font-bold mb-2">Deploying Your dApp</h1>
+        <h1 className="text-3xl font-bold mb-2">
+          {isEditMode ? "Redeploying Your dApp" : "Deploying Your dApp"}
+        </h1>
         <p className="text-muted-foreground">
           This may take a few minutes
         </p>
@@ -501,6 +533,7 @@ export function DeployStep() {
                     setError(null);
                     setPhaseStatus((prev) => ({ ...prev, github: "error", vercel: "error" }));
                     setCurrentPhase("done");
+                    if (isEditMode) setIsEditMode(false);
                     setStep("results");
                   }}
                 >
@@ -515,6 +548,7 @@ export function DeployStep() {
                     setError(null);
                     setPhaseStatus((prev) => ({ ...prev, vercel: "error" }));
                     setCurrentPhase("done");
+                    if (isEditMode) setIsEditMode(false);
                     setStep("results");
                   }}
                 >
