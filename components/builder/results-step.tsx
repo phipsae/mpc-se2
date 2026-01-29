@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useBuilderStore } from "@/lib/store";
 import { Button } from "@/components/ui/button";
@@ -8,7 +9,16 @@ import { Separator } from "@/components/ui/separator";
 
 export function ResultsStep() {
   const router = useRouter();
-  const { deployment, githubRepo, vercelDeployment, reset } = useBuilderStore();
+  const { deployment, githubRepo, vercelDeployment, reset, saveCurrentProject } = useBuilderStore();
+  const hasSaved = useRef(false);
+
+  // Auto-save the project when reaching results
+  useEffect(() => {
+    if (!hasSaved.current) {
+      saveCurrentProject();
+      hasSaved.current = true;
+    }
+  }, [saveCurrentProject]);
 
   const handleStartOver = () => {
     reset();

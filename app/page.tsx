@@ -9,15 +9,17 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
 import { useBuilderStore } from "@/lib/store";
 import { useAuthConnections } from "@/lib/auth/use-auth-connections";
+import { ProjectCard } from "@/components/project-card";
 
 export default function Home() {
   const router = useRouter();
   const { isConnected } = useAccount();
   const [prompt, setPrompt] = useState("");
   const [vercelTokenInput, setVercelTokenInput] = useState("");
-  const { setPrompt: setStorePrompt, setStep } = useBuilderStore();
+  const { setPrompt: setStorePrompt, setStep, savedProjects, reset } = useBuilderStore();
 
   // Auth connections
   const {
@@ -39,6 +41,7 @@ export default function Home() {
 
   const handleStartBuilding = () => {
     if (!prompt.trim()) return;
+    reset(); // Clear any previous project state
     setStorePrompt(prompt);
     setStep("prompt");
     router.push("/builder");
@@ -224,6 +227,21 @@ export default function Home() {
             ))}
           </div>
         </div>
+
+        {/* Your Projects */}
+        {savedProjects.length > 0 && (
+          <>
+            <Separator className="my-8" />
+            <div className="w-full">
+              <h2 className="text-xl font-semibold mb-4">Your Projects</h2>
+              <div className="grid gap-4 sm:grid-cols-2">
+                {savedProjects.map((project) => (
+                  <ProjectCard key={project.id} project={project} />
+                ))}
+              </div>
+            </div>
+          </>
+        )}
       </div>
 
       {/* Footer */}

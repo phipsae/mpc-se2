@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Loader2, CheckCircle2, XCircle, Sparkles } from "lucide-react";
 import { useBuilderStore } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,6 +15,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+
+type FixStatus = "idle" | "analyzing" | "fixing" | "verifying" | "success" | "failed";
 
 async function runChecks(contracts: { name: string; content: string }[]) {
   // Compile first
@@ -66,17 +69,32 @@ export function ChecksStep() {
   } = useBuilderStore();
 
   const [acknowledgedWarnings, setAcknowledgedWarnings] = useState(false);
-  const [isFixing, setIsFixing] = useState(false);
+  
+  // Compilation fix state
+  const [fixStatus, setFixStatus] = useState<FixStatus>("idle");
   const [fixError, setFixError] = useState<string | null>(null);
+  const [fixAttempts, setFixAttempts] = useState(0);
+
+  // Security fix state
+  const [securityFixStatus, setSecurityFixStatus] = useState<FixStatus>("idle");
+  const [securityFixError, setSecurityFixError] = useState<string | null>(null);
+  const [securityFixAttempts, setSecurityFixAttempts] = useState(0);
+
+  const isFixing = fixStatus === "analyzing" || fixStatus === "fixing" || fixStatus === "verifying";
+  const isFixingSecurity = securityFixStatus === "analyzing" || securityFixStatus === "fixing" || securityFixStatus === "verifying";
 
   const handleFixErrors = async () => {
     if (!generatedCode || !checkResult?.compilation.errors.length) return;
 
-    setIsFixing(true);
+    setFixStatus("analyzing");
     setFixError(null);
 
     try {
-      // Call the fix API
+      // Stage 1: Analyzing
+      await new Promise((r) => setTimeout(r, 500)); // Brief delay for UX
+      setFixStatus("fixing");
+
+      // Stage 2: Call the fix API
       const fixRes = await fetch("/api/fix", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -98,13 +116,121 @@ export function ChecksStep() {
         contracts: fixData.contracts,
       });
 
-      // Re-run checks with the fixed code
+      // Stage 3: Verifying the fix
+      setFixStatus("verifying");
       const newCheckResult = await runChecks(fixData.contracts);
       setCheckResult(newCheckResult);
+
+      // Check if fix was successful
+      if (newCheckResult.compilation.success) {
+        setFixStatus("success");
+        setFixAttempts((prev) => prev + 1);
+      } else {
+        setFixStatus("failed");
+        setFixAttempts((prev) => prev + 1);
+        setFixError("Fix applied but compilation still has errors. You can try again.");
+      }
     } catch (error) {
+      setFixStatus("failed");
       setFixError(error instanceof Error ? error.message : "Failed to fix errors");
-    } finally {
-      setIsFixing(false);
+    }
+  };
+
+  const getFixStatusMessage = () => {
+    switch (fixStatus) {
+      case "analyzing":
+        return "Analyzing compilation errors...";
+      case "fixing":
+        return "AI is generating fixes...";
+      case "verifying":
+        return "Verifying the fix compiles correctly...";
+      case "success":
+        return "Fixed successfully!";
+      case "failed":
+        return "Fix attempt failed";
+      default:
+        return "";
+    }
+  };
+
+  const getSecurityFixStatusMessage = () => {
+    switch (securityFixStatus) {
+      case "analyzing":
+        return "Analyzing security issues...";
+      case "fixing":
+        return "AI is fixing security issues...";
+      case "verifying":
+        return "Verifying the fix...";
+      case "success":
+        return "Security issues fixed!";
+      case "failed":
+        return "Fix attempt failed";
+      default:
+        return "";
+    }
+  };
+
+  const handleFixSecurityWarnings = async () => {
+    if (!generatedCode || !checkResult?.security.warnings.length) return;
+
+    setSecurityFixStatus("analyzing");
+    setSecurityFixError(null);
+
+    try {
+      await new Promise((r) => setTimeout(r, 500));
+      setSecurityFixStatus("fixing");
+
+      // Format security warnings for the fix API
+      const securityIssues = checkResult.security.warnings.map((w) => 
+        `[${w.severity.toUpperCase()}]${w.line ? ` Line ${w.line}:` : ""} ${w.message}`
+      );
+
+      const fixRes = await fetch("/api/fix", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contracts: generatedCode.contracts,
+          errors: securityIssues,
+          fixType: "security",
+        }),
+      });
+
+      const fixData = await fixRes.json();
+
+      if (!fixData.success) {
+        throw new Error(fixData.error || "Failed to fix security issues");
+      }
+
+      setGeneratedCode({
+        ...generatedCode,
+        contracts: fixData.contracts,
+      });
+
+      setSecurityFixStatus("verifying");
+      const newCheckResult = await runChecks(fixData.contracts);
+      setCheckResult(newCheckResult);
+
+      // Check if security warnings are resolved
+      const remainingWarnings = newCheckResult.security.warnings.length;
+      const previousWarnings = checkResult.security.warnings.length;
+
+      if (remainingWarnings < previousWarnings) {
+        setSecurityFixStatus("success");
+        setSecurityFixAttempts((prev) => prev + 1);
+        if (remainingWarnings > 0) {
+          setSecurityFixError(`Reduced from ${previousWarnings} to ${remainingWarnings} issues. You can try again.`);
+        }
+      } else if (remainingWarnings === 0) {
+        setSecurityFixStatus("success");
+        setSecurityFixAttempts((prev) => prev + 1);
+      } else {
+        setSecurityFixStatus("failed");
+        setSecurityFixAttempts((prev) => prev + 1);
+        setSecurityFixError("Could not fix all security issues. You can try again or proceed with caution.");
+      }
+    } catch (error) {
+      setSecurityFixStatus("failed");
+      setSecurityFixError(error instanceof Error ? error.message : "Failed to fix security issues");
     }
   };
 
@@ -155,30 +281,94 @@ export function ChecksStep() {
         </CardHeader>
         <CardContent>
           {checkResult.compilation.success ? (
-            <p className="text-green-600">Successfully compiled</p>
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="h-5 w-5 text-green-500" />
+              <p className="text-green-600">Successfully compiled</p>
+              {fixStatus === "success" && (
+                <Badge variant="secondary" className="ml-2 bg-green-100 text-green-700">
+                  Fixed by AI
+                </Badge>
+              )}
+            </div>
           ) : (
             <div className="space-y-4">
               <div className="space-y-2">
                 {checkResult.compilation.errors.map((error, i) => (
                   <Alert key={i} variant="destructive">
-                    <AlertDescription>{error}</AlertDescription>
+                    <AlertDescription className="font-mono text-xs whitespace-pre-wrap">
+                      {error}
+                    </AlertDescription>
                   </Alert>
                 ))}
               </div>
-              <div className="flex items-center gap-3">
-                <Button
-                  variant="secondary"
-                  onClick={handleFixErrors}
-                  disabled={isFixing}
-                >
-                  {isFixing ? "Fixing..." : "Fix with AI"}
-                </Button>
+
+              {/* Fix Progress Section */}
+              <div className="rounded-lg border bg-muted/30 p-4 space-y-3">
+                <div className="flex items-center gap-3">
+                  <Button
+                    onClick={handleFixErrors}
+                    disabled={isFixing}
+                    className="gap-2"
+                  >
+                    {isFixing ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Sparkles className="h-4 w-4" />
+                    )}
+                    {isFixing ? "Fixing..." : fixAttempts > 0 ? "Try Again" : "Fix with AI"}
+                  </Button>
+
+                  {fixStatus !== "idle" && (
+                    <div className="flex items-center gap-2 text-sm">
+                      {fixStatus === "success" ? (
+                        <CheckCircle2 className="h-4 w-4 text-green-500" />
+                      ) : fixStatus === "failed" ? (
+                        <XCircle className="h-4 w-4 text-red-500" />
+                      ) : (
+                        <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                      )}
+                      <span
+                        className={
+                          fixStatus === "success"
+                            ? "text-green-600"
+                            : fixStatus === "failed"
+                            ? "text-red-600"
+                            : "text-muted-foreground"
+                        }
+                      >
+                        {getFixStatusMessage()}
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Progress Steps */}
                 {isFixing && (
-                  <span className="text-sm text-muted-foreground">
-                    AI is analyzing and fixing the errors...
-                  </span>
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <div className={`flex items-center gap-1 ${fixStatus === "analyzing" ? "text-primary font-medium" : fixStatus !== "analyzing" ? "text-green-600" : ""}`}>
+                      <span className={`w-2 h-2 rounded-full ${fixStatus === "analyzing" ? "bg-primary animate-pulse" : "bg-green-500"}`} />
+                      Analyze
+                    </div>
+                    <span>→</span>
+                    <div className={`flex items-center gap-1 ${fixStatus === "fixing" ? "text-primary font-medium" : fixStatus === "verifying" ? "text-green-600" : ""}`}>
+                      <span className={`w-2 h-2 rounded-full ${fixStatus === "fixing" ? "bg-primary animate-pulse" : fixStatus === "verifying" ? "bg-green-500" : "bg-muted-foreground/30"}`} />
+                      Generate Fix
+                    </div>
+                    <span>→</span>
+                    <div className={`flex items-center gap-1 ${fixStatus === "verifying" ? "text-primary font-medium" : ""}`}>
+                      <span className={`w-2 h-2 rounded-full ${fixStatus === "verifying" ? "bg-primary animate-pulse" : "bg-muted-foreground/30"}`} />
+                      Verify
+                    </div>
+                  </div>
+                )}
+
+                {fixAttempts > 0 && !isFixing && (
+                  <p className="text-xs text-muted-foreground">
+                    Attempted {fixAttempts} {fixAttempts === 1 ? "fix" : "fixes"}
+                  </p>
                 )}
               </div>
+
               {fixError && (
                 <Alert variant="destructive">
                   <AlertDescription>{fixError}</AlertDescription>
@@ -213,11 +403,19 @@ export function ChecksStep() {
               <span className="text-yellow-500">⚠</span>
             )}
             Security Analysis
+            {securityFixStatus === "success" && checkResult.security.warnings.length === 0 && (
+              <Badge variant="secondary" className="ml-2 bg-green-100 text-green-700">
+                Fixed by AI
+              </Badge>
+            )}
           </CardTitle>
         </CardHeader>
         <CardContent>
           {checkResult.security.warnings.length === 0 ? (
-            <p className="text-green-600">No security issues detected</p>
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="h-5 w-5 text-green-500" />
+              <p className="text-green-600">No security issues detected</p>
+            </div>
           ) : (
             <div className="space-y-3">
               {checkResult.security.warnings.map((warning, i) => (
@@ -238,7 +436,88 @@ export function ChecksStep() {
                   <AlertDescription>{warning.message}</AlertDescription>
                 </Alert>
               ))}
-              {hasWarnings && !hasErrors && (
+
+              {/* Security Fix Section */}
+              <div className="rounded-lg border bg-muted/30 p-4 space-y-3 mt-4">
+                <div className="flex items-center gap-3">
+                  <Button
+                    onClick={handleFixSecurityWarnings}
+                    disabled={isFixingSecurity || !checkResult.compilation.success}
+                    variant="secondary"
+                    className="gap-2"
+                  >
+                    {isFixingSecurity ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Sparkles className="h-4 w-4" />
+                    )}
+                    {isFixingSecurity ? "Fixing..." : securityFixAttempts > 0 ? "Try Again" : "Fix with AI"}
+                  </Button>
+
+                  {securityFixStatus !== "idle" && (
+                    <div className="flex items-center gap-2 text-sm">
+                      {securityFixStatus === "success" ? (
+                        <CheckCircle2 className="h-4 w-4 text-green-500" />
+                      ) : securityFixStatus === "failed" ? (
+                        <XCircle className="h-4 w-4 text-red-500" />
+                      ) : (
+                        <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                      )}
+                      <span
+                        className={
+                          securityFixStatus === "success"
+                            ? "text-green-600"
+                            : securityFixStatus === "failed"
+                            ? "text-red-600"
+                            : "text-muted-foreground"
+                        }
+                      >
+                        {getSecurityFixStatusMessage()}
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Progress Steps */}
+                {isFixingSecurity && (
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <div className={`flex items-center gap-1 ${securityFixStatus === "analyzing" ? "text-primary font-medium" : securityFixStatus !== "analyzing" ? "text-green-600" : ""}`}>
+                      <span className={`w-2 h-2 rounded-full ${securityFixStatus === "analyzing" ? "bg-primary animate-pulse" : "bg-green-500"}`} />
+                      Analyze
+                    </div>
+                    <span>→</span>
+                    <div className={`flex items-center gap-1 ${securityFixStatus === "fixing" ? "text-primary font-medium" : securityFixStatus === "verifying" ? "text-green-600" : ""}`}>
+                      <span className={`w-2 h-2 rounded-full ${securityFixStatus === "fixing" ? "bg-primary animate-pulse" : securityFixStatus === "verifying" ? "bg-green-500" : "bg-muted-foreground/30"}`} />
+                      Generate Fix
+                    </div>
+                    <span>→</span>
+                    <div className={`flex items-center gap-1 ${securityFixStatus === "verifying" ? "text-primary font-medium" : ""}`}>
+                      <span className={`w-2 h-2 rounded-full ${securityFixStatus === "verifying" ? "bg-primary animate-pulse" : "bg-muted-foreground/30"}`} />
+                      Verify
+                    </div>
+                  </div>
+                )}
+
+                {!checkResult.compilation.success && (
+                  <p className="text-xs text-muted-foreground">
+                    Fix compilation errors first before fixing security issues
+                  </p>
+                )}
+
+                {securityFixAttempts > 0 && !isFixingSecurity && (
+                  <p className="text-xs text-muted-foreground">
+                    Attempted {securityFixAttempts} {securityFixAttempts === 1 ? "fix" : "fixes"}
+                  </p>
+                )}
+              </div>
+
+              {securityFixError && (
+                <Alert variant={securityFixStatus === "success" ? "default" : "destructive"}>
+                  <AlertDescription>{securityFixError}</AlertDescription>
+                </Alert>
+              )}
+
+              {hasWarnings && !hasErrors && checkResult.compilation.success && (
                 <label className="flex items-center gap-2 mt-4">
                   <input
                     type="checkbox"

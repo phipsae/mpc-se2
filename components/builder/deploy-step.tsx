@@ -60,6 +60,17 @@ export function DeployStep() {
       return;
     }
 
+    // Verify we're on the expected network
+    if (chain?.id !== selectedNetwork) {
+      setError(
+        `Network mismatch! Your wallet is connected to ${chain?.name || "unknown network"} ` +
+        `but you selected to deploy on network ID ${selectedNetwork}. ` +
+        `Please switch your wallet to the correct network.`
+      );
+      setPhaseStatus((prev) => ({ ...prev, contract: "error" }));
+      return;
+    }
+
     setPhaseStatus((prev) => ({ ...prev, contract: "loading" }));
     setLoadingMessage("Waiting for transaction signature...");
 
@@ -80,33 +91,156 @@ export function DeployStep() {
       // Store ABI for later use
       setContractAbi(abi);
 
+      // Extract constructor arguments from ABI and provide defaults
+      const constructor = abi.find((item: { type: string }) => item.type === "constructor");
+      const constructorArgs: unknown[] = [];
+      
+      if (constructor?.inputs?.length > 0) {
+        console.log("Constructor requires arguments:", constructor.inputs);
+        setLoadingMessage("Preparing constructor arguments...");
+        
+        for (const input of constructor.inputs) {
+          const paramType = input.type;
+          const paramName = input.name?.toLowerCase() || "";
+          
+          // Provide sensible defaults based on type and name
+          if (paramType === "address") {
+            // Use deployer's address for owner/admin type params, zero address otherwise
+            if (paramName.includes("owner") || paramName.includes("admin") || paramName.includes("initial")) {
+              constructorArgs.push(address);
+            } else {
+              constructorArgs.push(address); // Default to deployer for any address
+            }
+          } else if (paramType === "string") {
+            // Common string params
+            if (paramName.includes("name")) {
+              constructorArgs.push(generatedCode?.contracts[0]?.name.replace(".sol", "") || "MyToken");
+            } else if (paramName.includes("symbol")) {
+              constructorArgs.push("TKN");
+            } else if (paramName.includes("uri") || paramName.includes("url")) {
+              constructorArgs.push("");
+            } else {
+              constructorArgs.push("");
+            }
+          } else if (paramType.startsWith("uint")) {
+            // Numeric defaults
+            if (paramName.includes("supply") || paramName.includes("total")) {
+              constructorArgs.push(BigInt("1000000000000000000000000")); // 1 million with 18 decimals
+            } else if (paramName.includes("price") || paramName.includes("cost") || paramName.includes("fee")) {
+              constructorArgs.push(BigInt("10000000000000000")); // 0.01 ETH
+            } else if (paramName.includes("max") || paramName.includes("limit") || paramName.includes("cap")) {
+              constructorArgs.push(BigInt("10000"));
+            } else {
+              constructorArgs.push(BigInt(0));
+            }
+          } else if (paramType.startsWith("int")) {
+            constructorArgs.push(BigInt(0));
+          } else if (paramType === "bool") {
+            constructorArgs.push(true);
+          } else if (paramType === "bytes32") {
+            constructorArgs.push("0x0000000000000000000000000000000000000000000000000000000000000000");
+          } else if (paramType === "bytes") {
+            constructorArgs.push("0x");
+          } else if (paramType.endsWith("[]")) {
+            constructorArgs.push([]);
+          } else {
+            // Unknown type - try zero/empty
+            constructorArgs.push(paramType.includes("int") ? BigInt(0) : "0x");
+          }
+        }
+        
+        console.log("Constructor args:", constructorArgs);
+      }
+
+      setLoadingMessage("Waiting for transaction signature...");
+
       // Deploy the contract
       const hash = await walletClient.deployContract({
         abi,
         bytecode: `0x${bytecode}`,
-        args: [], // TODO: Handle constructor args
+        args: constructorArgs,
       });
 
       setLoadingMessage("Waiting for transaction confirmation...");
 
       const receipt = await publicClient.waitForTransactionReceipt({ hash });
 
-      if (receipt.contractAddress) {
-        setContractAddress(receipt.contractAddress);
-        setDeployment({
-          contractAddress: receipt.contractAddress,
-          transactionHash: hash,
-          networkId: selectedNetwork,
-          networkName: chain?.name || "Unknown",
-          explorerUrl: `${chain?.blockExplorers?.default.url}/address/${receipt.contractAddress}`,
-        });
-        setPhaseStatus((prev) => ({ ...prev, contract: "success" }));
-        setCurrentPhase("github");
+      // Check if transaction was successful
+      if (receipt.status === "reverted") {
+        throw new Error(
+          "Transaction reverted on-chain. This usually means:\n" +
+          "• Constructor arguments were invalid\n" +
+          "• A require() statement failed\n" +
+          "• Not enough gas was provided"
+        );
       }
+
+      if (!receipt.contractAddress) {
+        throw new Error("No contract address in receipt. Deployment may have failed.");
+      }
+
+      // Verify the contract exists on-chain with retries
+      setLoadingMessage("Verifying contract on-chain...");
+      
+      let code: string | undefined;
+      let verifyAttempts = 0;
+      const maxAttempts = 5;
+      
+      while (verifyAttempts < maxAttempts) {
+        verifyAttempts++;
+        try {
+          code = await publicClient.getCode({ address: receipt.contractAddress });
+          if (code && code !== "0x" && code.length > 2) {
+            break; // Contract verified!
+          }
+        } catch (codeError) {
+          console.warn(`Verification attempt ${verifyAttempts} failed:`, codeError);
+        }
+        
+        if (verifyAttempts < maxAttempts) {
+          setLoadingMessage(`Verifying contract on-chain (attempt ${verifyAttempts + 1}/${maxAttempts})...`);
+          await new Promise((r) => setTimeout(r, 2000)); // Wait 2 seconds before retry
+        }
+      }
+      
+      if (!code || code === "0x" || code.length <= 2) {
+        throw new Error(
+          `Contract verification failed. No bytecode found at ${receipt.contractAddress}.\n\n` +
+          "The transaction was mined but no contract exists. Possible causes:\n" +
+          "• The constructor reverted silently\n" +
+          "• Wrong network selected\n" +
+          "• RPC node sync issue\n\n" +
+          `Check the transaction: ${chain?.blockExplorers?.default.url}/tx/${hash}`
+        );
+      }
+
+      console.log(`Contract verified! Bytecode length: ${code.length} bytes`);
+      setContractAddress(receipt.contractAddress);
+      setDeployment({
+        contractAddress: receipt.contractAddress,
+        transactionHash: hash,
+        networkId: selectedNetwork,
+        networkName: chain?.name || "Unknown",
+        explorerUrl: `${chain?.blockExplorers?.default.url}/address/${receipt.contractAddress}`,
+      });
+      setPhaseStatus((prev) => ({ ...prev, contract: "success" }));
+      setCurrentPhase("github");
     } catch (err) {
       console.error("Deploy error:", err);
       setPhaseStatus((prev) => ({ ...prev, contract: "error" }));
-      setError(err instanceof Error ? err.message : "Failed to deploy contract");
+      
+      // Provide more helpful error messages
+      let errorMessage = err instanceof Error ? err.message : "Failed to deploy contract";
+      
+      if (errorMessage.includes("rejected") || errorMessage.includes("denied")) {
+        errorMessage = "Transaction was rejected. Please try again and confirm the transaction in your wallet.";
+      } else if (errorMessage.includes("insufficient funds")) {
+        errorMessage = "Insufficient funds for gas. Please add more ETH to your wallet.";
+      } else if (errorMessage.includes("nonce")) {
+        errorMessage = "Transaction nonce error. Try refreshing the page and deploying again.";
+      }
+      
+      setError(errorMessage);
     } finally {
       setLoadingMessage("");
     }
@@ -167,9 +301,19 @@ export function DeployStep() {
     }
 
     setPhaseStatus((prev) => ({ ...prev, vercel: "loading" }));
-    setLoadingMessage("Deploying to Vercel...");
+    setLoadingMessage("Creating Vercel project...");
 
     try {
+      // Show progress messages
+      const messageInterval = setInterval(() => {
+        setLoadingMessage((prev) => {
+          if (prev.includes("Creating")) return "Connecting to GitHub repository...";
+          if (prev.includes("Connecting")) return "Triggering deployment...";
+          if (prev.includes("Triggering")) return "Building your dApp (this may take a few minutes)...";
+          return "Building your dApp (this may take a few minutes)...";
+        });
+      }, 8000);
+
       const response = await fetch("/api/vercel", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -180,6 +324,7 @@ export function DeployStep() {
         }),
       });
 
+      clearInterval(messageInterval);
       const data = await response.json();
 
       if (data.success) {
@@ -303,8 +448,26 @@ export function DeployStep() {
               <CardDescription>{phase.description}</CardDescription>
             </CardHeader>
             {phase.id === "contract" && contractAddress && (
-              <CardContent>
-                <p className="font-mono text-sm break-all">{contractAddress}</p>
+              <CardContent className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <p className="font-mono text-sm break-all">{contractAddress}</p>
+                </div>
+                {phaseStatus.contract === "success" && (
+                  <div className="flex items-center gap-2 text-sm text-green-600">
+                    <span>✓</span>
+                    <span>Verified on-chain</span>
+                  </div>
+                )}
+                {chain?.blockExplorers?.default.url && (
+                  <a
+                    href={`${chain.blockExplorers.default.url}/address/${contractAddress}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-sm text-primary hover:underline"
+                  >
+                    View on {chain.blockExplorers.default.name || "Explorer"} →
+                  </a>
+                )}
               </CardContent>
             )}
           </Card>
@@ -314,21 +477,79 @@ export function DeployStep() {
       {/* Error */}
       {error && (
         <Card className="border-red-500">
-          <CardContent className="pt-6">
+          <CardContent className="pt-6 space-y-4">
             <p className="text-red-500">{error}</p>
-            <Button
-              variant="outline"
-              className="mt-4"
-              onClick={() => {
-                setError(null);
-                // Retry current phase
-                if (currentPhase === "contract") deployContract();
-                else if (currentPhase === "github") pushToGitHub();
-                else if (currentPhase === "vercel") deployToVercel();
-              }}
-            >
-              Retry
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setError(null);
+                  // Retry current phase
+                  if (currentPhase === "contract") deployContract();
+                  else if (currentPhase === "github") pushToGitHub();
+                  else if (currentPhase === "vercel") deployToVercel();
+                }}
+              >
+                Retry
+              </Button>
+              
+              {/* Allow skipping GitHub/Vercel if contract is deployed */}
+              {currentPhase === "github" && contractAddress && (
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    setError(null);
+                    setPhaseStatus((prev) => ({ ...prev, github: "error", vercel: "error" }));
+                    setCurrentPhase("done");
+                    setStep("results");
+                  }}
+                >
+                  Skip GitHub & Vercel
+                </Button>
+              )}
+              
+              {currentPhase === "vercel" && githubRepoUrl && (
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    setError(null);
+                    setPhaseStatus((prev) => ({ ...prev, vercel: "error" }));
+                    setCurrentPhase("done");
+                    setStep("results");
+                  }}
+                >
+                  Skip Vercel Deployment
+                </Button>
+              )}
+            </div>
+            
+            {/* Helpful tips based on error */}
+            {currentPhase === "github" && (
+              <div className="text-sm text-muted-foreground border-t pt-4 mt-4">
+                <p className="font-medium mb-2">Troubleshooting tips:</p>
+                <ul className="list-disc list-inside space-y-1">
+                  <li>Make sure you&apos;re connected to GitHub with the correct account</li>
+                  <li>Check if you have permission to create repositories</li>
+                  <li>Try disconnecting and reconnecting your GitHub account</li>
+                </ul>
+              </div>
+            )}
+            
+            {currentPhase === "vercel" && (
+              <div className="text-sm text-muted-foreground border-t pt-4 mt-4">
+                <p className="font-medium mb-2">Troubleshooting tips:</p>
+                <ul className="list-disc list-inside space-y-1">
+                  <li>Make sure your Vercel token is valid and not expired</li>
+                  <li>Ensure Vercel is connected to your GitHub account at{" "}
+                    <a href="https://vercel.com/account/integrations" target="_blank" rel="noopener noreferrer" className="underline">
+                      vercel.com/account/integrations
+                    </a>
+                  </li>
+                  <li>Grant Vercel access to the repository in GitHub integration settings</li>
+                  <li>Try generating a new token at vercel.com/account/tokens</li>
+                </ul>
+              </div>
+            )}
           </CardContent>
         </Card>
       )}
