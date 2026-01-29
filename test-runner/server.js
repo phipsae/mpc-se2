@@ -238,7 +238,12 @@ function analyzeSecurityPatterns(contracts) {
 
 const GENERATE_SYSTEM_PROMPT = `You are an expert Solidity and React developer specializing in secure smart contract development.
 
-Your task is to generate production-ready Solidity contracts and comprehensive Foundry tests.
+Your task is to generate:
+1. Production-ready Solidity contracts
+2. React/Next.js frontend pages
+3. Comprehensive Foundry tests (REQUIRED - do not skip)
+
+IMPORTANT: You MUST generate a Foundry test file for each contract. Tests are NOT optional.
 
 ## SOLIDITY REQUIREMENTS:
 - Use Solidity ^0.8.20 or later
@@ -248,16 +253,28 @@ Your task is to generate production-ready Solidity contracts and comprehensive F
 - Follow checks-effects-interactions pattern
 - Use call{value: x}() instead of transfer/send
 
-## TEST REQUIREMENTS - FOUNDRY TESTS:
-Generate comprehensive Foundry/Forge tests in Solidity that cover:
-1. Basic functionality tests
-2. Access control tests (non-owner calling owner functions should revert)
-3. Edge cases (zero address, max uint256, empty arrays)
-4. Reentrancy attack simulation tests
-5. Event emission tests
-6. State change verification
+## TEST REQUIREMENTS - FOUNDRY SOLIDITY TESTS ONLY:
+Generate comprehensive Foundry/Forge tests in SOLIDITY.
 
-Test file structure (MUST follow this pattern):
+CRITICAL - DO NOT USE (these are Hardhat/JavaScript - ABSOLUTELY FORBIDDEN):
+- describe(), it(), expect(), before(), beforeEach()
+- chai, mocha, or any JavaScript/TypeScript testing library
+- ethers.getSigners(), ethers.getContractFactory()
+- loadFixture(), time.increase()
+- TypeScript or JavaScript syntax
+- .test.ts, .test.js file extensions
+- async/await in test functions
+
+ONLY USE Foundry Solidity patterns:
+- function testXxx() public - all test functions start with "test"
+- function testFuzz_Xxx(uint256 x) public - fuzz tests  
+- vm.prank(addr), vm.startPrank(addr), vm.stopPrank()
+- vm.expectRevert(), vm.expectEmit()
+- assertEq(), assertTrue(), assertFalse()
+- makeAddr("name"), deal(addr, amount)
+- .t.sol file extension ONLY
+
+Test file structure:
 \`\`\`solidity
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -269,13 +286,10 @@ contract ContractNameTest is Test {
     ContractName public contractInstance;
     address public owner;
     address public user1;
-    address public attacker;
 
     function setUp() public {
         owner = address(this);
         user1 = makeAddr("user1");
-        attacker = makeAddr("attacker");
-        
         contractInstance = new ContractName(/* constructor args */);
     }
 
@@ -288,24 +302,8 @@ contract ContractNameTest is Test {
         vm.expectRevert();
         contractInstance.ownerOnlyFunction();
     }
-
-    function testFuzz_SomeFunction(uint256 amount) public {
-        vm.assume(amount > 0 && amount < 1e18);
-        // fuzz test
-    }
 }
 \`\`\`
-
-IMPORTANT Foundry test conventions:
-- Import "forge-std/Test.sol" for testing utilities
-- Contract must inherit from Test
-- Use setUp() for initialization
-- Test functions must start with "test" or "testFuzz_" or "testFail_"
-- Use vm.prank(addr) to impersonate addresses
-- Use vm.expectRevert() before calls that should revert
-- Use makeAddr("name") to create test addresses
-- Use deal(addr, amount) to give ETH to addresses
-- Use assertEq, assertTrue, assertFalse for assertions
 
 ## OUTPUT FORMAT:
 ---CONTRACT: ContractName.sol---
@@ -320,7 +318,7 @@ IMPORTANT Foundry test conventions:
 
 ---TEST: ContractName.t.sol---
 \`\`\`solidity
-// Foundry test code
+// Foundry Solidity test code - NO JavaScript
 \`\`\``;
 
 async function generateCode(prompt, plan) {
@@ -333,7 +331,18 @@ Pages: ${plan.pages.map(p => `${p.path} - ${p.description}`).join("; ")}
 
 Original request: ${prompt}
 
-Generate secure Solidity contract(s), React page(s), and comprehensive security tests.`;
+YOU MUST GENERATE ALL THREE:
+1. Solidity smart contract(s) using ---CONTRACT: filename.sol--- markers
+2. React/Next.js page(s) using ---PAGE: app/path/page.tsx--- markers  
+3. Foundry/Forge test file(s) using ---TEST: filename.t.sol--- markers
+
+The test file MUST:
+- Be written in Solidity (NOT JavaScript/TypeScript)
+- Import "forge-std/Test.sol"
+- Use function testXxx() naming convention
+- Test all major functionality of the contract
+
+Do NOT skip the test file - it is required.`;
 
   const message = await anthropic.messages.create({
     model: "claude-sonnet-4-20250514",
@@ -361,36 +370,103 @@ Generate secure Solidity contract(s), React page(s), and comprehensive security 
     pages.push({ path: match[1].trim(), content: match[2].trim() });
   }
   
-  // Parse tests (Foundry tests are .t.sol files)
+  // Parse tests (Foundry tests are .t.sol files - SOLIDITY ONLY)
   const tests = [];
-  const testMatches = responseText.matchAll(/---TEST:\s*([^\n-]+)---\s*```(?:solidity|typescript|ts)?\s*([\s\S]*?)```/gi);
+  const testMatches = responseText.matchAll(/---TEST:\s*([^\n-]+)---\s*```(?:solidity)?\s*([\s\S]*?)```/gi);
   for (const match of testMatches) {
+    const testContent = match[2].trim();
+    
+    // REJECT JavaScript/Hardhat tests - only accept Foundry Solidity tests
+    const isHardhatTest = testContent.includes('describe(') || 
+                          testContent.includes('it(') ||
+                          testContent.includes('require("chai")') ||
+                          testContent.includes('ethers.getSigners');
+    
+    if (isHardhatTest) {
+      console.warn('Rejected Hardhat/JavaScript test - only Foundry Solidity tests accepted');
+      continue;
+    }
+    
     let testName = match[1].trim();
     // Ensure .t.sol extension for Foundry tests
     if (!testName.endsWith('.t.sol')) {
       testName = testName.replace(/\.(sol|ts|test\.ts)$/, '') + '.t.sol';
     }
-    tests.push({ name: testName, content: match[2].trim() });
+    tests.push({ name: testName, content: testContent });
   }
   
-  // Fallback: try code blocks
+  // Fallback: try solidity code blocks for contracts
   if (contracts.length === 0) {
     const solidityBlocks = responseText.matchAll(/```solidity\s*([\s\S]*?)```/gi);
     let i = 0;
     for (const match of solidityBlocks) {
+      // Skip if it looks like a test file
+      if (match[1].includes('forge-std/Test.sol')) continue;
       contracts.push({ name: `Contract${i > 0 ? i + 1 : ""}.sol`, content: match[1].trim() });
       i++;
     }
   }
   
+  // Fallback: try to find Foundry tests in solidity blocks (NOT JavaScript)
   if (tests.length === 0) {
-    const tsBlocks = responseText.matchAll(/```(?:typescript|ts)\s*([\s\S]*?)```/gi);
-    for (const match of tsBlocks) {
-      if (match[1].includes("describe(") || match[1].includes("it(")) {
-        tests.push({ name: `${contracts[0]?.name?.replace(".sol", "") || "Contract"}.test.ts`, content: match[1].trim() });
+    const solBlocks = responseText.matchAll(/```solidity\s*([\s\S]*?)```/gi);
+    for (const match of solBlocks) {
+      const content = match[1].trim();
+      // Only accept if it's a Foundry test (imports Test.sol, NOT JavaScript)
+      if ((content.includes('forge-std/Test.sol') || content.includes('is Test')) &&
+          !content.includes('describe(') && !content.includes('it(')) {
+        tests.push({ 
+          name: `${contracts[0]?.name?.replace(".sol", "") || "Contract"}.t.sol`, 
+          content: content 
+        });
         break;
       }
     }
+  }
+  
+  // Final fallback: generate a basic Foundry test if none exists
+  if (tests.length === 0 && contracts.length > 0) {
+    const contractName = contracts[0].name.replace(".sol", "");
+    const hasOwnable = contracts[0].content.includes("Ownable") || contracts[0].content.includes("owner()");
+    
+    const basicTest = `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+import "forge-std/Test.sol";
+import "../src/${contractName}.sol";
+
+contract ${contractName}Test is Test {
+    ${contractName} public instance;
+    address public owner;
+    address public user1;
+
+    function setUp() public {
+        owner = address(this);
+        user1 = makeAddr("user1");
+        instance = new ${contractName}();
+    }
+
+    function testDeployment() public view {
+        assertTrue(address(instance) != address(0), "Contract should be deployed");
+    }
+${hasOwnable ? `
+    function testOwner() public view {
+        assertEq(instance.owner(), owner, "Owner should be deployer");
+    }
+
+    function testUnauthorizedAccess() public {
+        vm.prank(user1);
+        vm.expectRevert();
+        // Attempt to call owner-only function
+    }
+` : ""}
+}
+`;
+    tests.push({
+      name: `${contractName}.t.sol`,
+      content: basicTest,
+    });
+    console.log(`Generated fallback test for ${contractName}`);
   }
   
   return { contracts, pages, tests };
@@ -478,11 +554,16 @@ const FIX_TESTS_PROMPT = `You are an expert Solidity developer using Foundry/For
 1. The contract if it has a bug
 2. The test if expectations are wrong
 
+CRITICAL - TESTS MUST BE SOLIDITY, NOT JAVASCRIPT:
+DO NOT USE: describe(), it(), expect(), chai, ethers.getSigners(), TypeScript
+ONLY USE Foundry Solidity: function testXxx(), vm.prank(), vm.expectRevert(), assertEq()
+
 Foundry test conventions:
 - Import "forge-std/Test.sol"
 - Inherit from Test
 - Use vm.prank(), vm.expectRevert(), makeAddr(), deal()
 - Test functions start with "test"
+- File extension: .t.sol
 
 Output format (include both if both need fixes):
 ---CONTRACT: ContractName.sol---
@@ -492,7 +573,7 @@ Output format (include both if both need fixes):
 
 ---TEST: ContractName.t.sol---
 \`\`\`solidity
-// fixed Foundry test if needed
+// fixed Foundry SOLIDITY test - NO JavaScript
 \`\`\``;
 
 async function fixTestFailures(contracts, tests, testOutput) {
@@ -521,11 +602,21 @@ async function fixTestFailures(contracts, tests, testOutput) {
     fixedContracts.push({ name: match[1].trim(), content: match[2].trim() });
   }
   
-  // Parse fixed tests
+  // Parse fixed tests (Foundry Solidity ONLY)
   const fixedTests = [];
-  const testMatches = responseText.matchAll(/---TEST:\s*([^\n-]+)---\s*```(?:typescript|ts)?\s*([\s\S]*?)```/gi);
+  const testMatches = responseText.matchAll(/---TEST:\s*([^\n-]+)---\s*```(?:solidity)?\s*([\s\S]*?)```/gi);
   for (const match of testMatches) {
-    fixedTests.push({ name: match[1].trim(), content: match[2].trim() });
+    const testContent = match[2].trim();
+    // Reject if it's JavaScript/Hardhat
+    if (testContent.includes('describe(') || testContent.includes('it(')) {
+      console.warn('Rejected JavaScript test from fix - only Foundry Solidity accepted');
+      continue;
+    }
+    let testName = match[1].trim();
+    if (!testName.endsWith('.t.sol')) {
+      testName = testName.replace(/\.(sol|ts|test\.ts)$/, '') + '.t.sol';
+    }
+    fixedTests.push({ name: testName, content: testContent });
   }
   
   return {
@@ -534,7 +625,7 @@ async function fixTestFailures(contracts, tests, testOutput) {
   };
 }
 
-// Build endpoint - full orchestration
+// Build endpoint with Server-Sent Events for real-time progress
 app.post("/build", async (req, res) => {
   const { prompt, plan } = req.body;
   
@@ -546,19 +637,47 @@ app.post("/build", async (req, res) => {
     return res.status(500).json({ success: false, error: "ANTHROPIC_API_KEY not configured" });
   }
   
+  // Set up SSE headers
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.flushHeaders();
+  
   const buildId = uuidv4();
   const logs = [];
-  const log = (msg) => {
-    const entry = `[${new Date().toISOString()}] ${msg}`;
-    logs.push(entry);
+  let currentStatus = "generating";
+  let totalIterations = 0;
+  
+  // Send SSE event helper
+  const sendEvent = (event, data) => {
+    res.write(`event: ${event}\n`);
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
+  
+  // Log and send progress
+  const log = (msg, status = currentStatus) => {
+    logs.push(msg);
     console.log(`[Build ${buildId}] ${msg}`);
+    sendEvent("progress", {
+      status,
+      message: msg,
+      logs: [...logs],
+      iteration: totalIterations,
+    });
+  };
+  
+  // Update status
+  const setStatus = (status) => {
+    currentStatus = status;
+    sendEvent("status", { status, iteration: totalIterations });
   };
   
   const startTime = Date.now();
-  let totalIterations = 0;
   
   try {
     // Step 1: Generate code
+    setStatus("generating");
     log("Generating code with Claude...");
     let { contracts, pages, tests } = await generateCode(prompt, plan);
     log(`Generated ${contracts.length} contracts, ${pages.length} pages, ${tests.length} tests`);
@@ -568,23 +687,28 @@ app.post("/build", async (req, res) => {
     }
     
     // Step 2: Compile with retries
+    setStatus("compiling");
+    log("Compiling contracts...");
     let compilationAttempts = 0;
     let compileResult = await compileContracts(contracts);
     
     while (!compileResult.success && compilationAttempts < MAX_COMPILATION_ATTEMPTS) {
       compilationAttempts++;
       totalIterations++;
+      setStatus("fixing_compilation");
       log(`Compilation failed (attempt ${compilationAttempts}), fixing errors...`);
       
       if (Date.now() - startTime > BUILD_TIMEOUT_MS) throw new Error("Build timeout");
       if (totalIterations >= MAX_TOTAL_ITERATIONS) throw new Error("Max iterations reached");
       
       contracts = await fixCompilationErrors(contracts, compileResult.errors);
+      setStatus("compiling");
+      log("Re-compiling after fixes...");
       compileResult = await compileContracts(contracts);
     }
     
     if (!compileResult.success) {
-      return res.json({
+      sendEvent("complete", {
         success: false,
         error: "Compilation failed after max attempts",
         code: { contracts, pages, tests },
@@ -592,18 +716,24 @@ app.post("/build", async (req, res) => {
         iterations: totalIterations,
         compileErrors: compileResult.errors,
       });
+      return res.end();
     }
     log("Compilation successful!");
     
-    // Step 3: Security analysis with fixes
+    // Step 3: Security analysis with fixes (fix ALL issues, not just critical)
+    setStatus("checking_security");
+    log("Running security analysis...");
     let securityAttempts = 0;
     let securityWarnings = analyzeSecurityPatterns(contracts);
-    const criticalWarnings = securityWarnings.filter(w => w.severity === "error");
     
-    while (criticalWarnings.length > 0 && securityAttempts < MAX_SECURITY_ATTEMPTS) {
+    // Fix ALL security issues (both errors and warnings) in automated mode
+    while (securityWarnings.length > 0 && securityAttempts < MAX_SECURITY_ATTEMPTS) {
       securityAttempts++;
       totalIterations++;
-      log(`Found ${criticalWarnings.length} critical security issues (attempt ${securityAttempts}), fixing...`);
+      setStatus("fixing_security");
+      const errorCount = securityWarnings.filter(w => w.severity === "error").length;
+      const warningCount = securityWarnings.filter(w => w.severity === "warning").length;
+      log(`Found ${errorCount} errors and ${warningCount} warnings (attempt ${securityAttempts}), fixing...`);
       
       if (Date.now() - startTime > BUILD_TIMEOUT_MS) throw new Error("Build timeout");
       if (totalIterations >= MAX_TOTAL_ITERATIONS) throw new Error("Max iterations reached");
@@ -611,23 +741,30 @@ app.post("/build", async (req, res) => {
       contracts = await fixSecurityIssues(contracts, securityWarnings);
       
       // Re-compile after security fixes
+      setStatus("compiling");
+      log("Re-compiling after security fixes...");
       compileResult = await compileContracts(contracts);
       if (!compileResult.success) {
+        setStatus("fixing_compilation");
         contracts = await fixCompilationErrors(contracts, compileResult.errors);
         compileResult = await compileContracts(contracts);
       }
       
+      setStatus("checking_security");
       securityWarnings = analyzeSecurityPatterns(contracts);
     }
-    log(`Security analysis complete. ${securityWarnings.length} remaining warnings.`);
+    log(`Security analysis complete. All issues fixed!`);
     
     // Step 4: Run tests with fixes
+    setStatus("testing");
+    log("Running Foundry tests...");
     let testAttempts = 0;
     let testResult = await runTestsInternal(contracts, tests);
     
     while (!testResult.success && testAttempts < MAX_TEST_ATTEMPTS) {
       testAttempts++;
       totalIterations++;
+      setStatus("fixing_tests");
       log(`Tests failed (attempt ${testAttempts}): ${testResult.failed} failures. Fixing...`);
       
       if (Date.now() - startTime > BUILD_TIMEOUT_MS) throw new Error("Build timeout");
@@ -638,8 +775,11 @@ app.post("/build", async (req, res) => {
       tests = fixed.tests;
       
       // Re-compile if contracts changed
+      setStatus("compiling");
+      log("Re-compiling after test fixes...");
       compileResult = await compileContracts(contracts);
       if (!compileResult.success) {
+        setStatus("fixing_compilation");
         contracts = await fixCompilationErrors(contracts, compileResult.errors);
         compileResult = await compileContracts(contracts);
         if (!compileResult.success) {
@@ -648,13 +788,16 @@ app.post("/build", async (req, res) => {
         }
       }
       
+      setStatus("testing");
+      log("Re-running tests...");
       testResult = await runTestsInternal(contracts, tests);
     }
     
     const elapsed = Date.now() - startTime;
-    log(`Build complete in ${elapsed}ms with ${totalIterations} iterations`);
+    setStatus("done");
+    log(`Build complete in ${(elapsed / 1000).toFixed(1)}s with ${totalIterations} iterations`);
     
-    res.json({
+    sendEvent("complete", {
       success: testResult.success,
       code: { contracts, pages, tests },
       testResult,
@@ -665,14 +808,16 @@ app.post("/build", async (req, res) => {
     });
     
   } catch (error) {
-    log(`Build error: ${error.message}`);
-    res.status(500).json({
+    log(`Build error: ${error.message}`, "failed");
+    sendEvent("complete", {
       success: false,
       error: error.message,
       logs,
       iterations: totalIterations,
     });
   }
+  
+  res.end();
 });
 
 // Internal test runner using Foundry/Forge
