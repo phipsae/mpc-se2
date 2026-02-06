@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Loader2, CheckCircle2, XCircle, Sparkles } from "lucide-react";
 import { useBuilderStore } from "@/lib/store";
 import { Button } from "@/components/ui/button";
@@ -66,9 +66,12 @@ export function ChecksStep() {
     setStep,
     generatedCode,
     setGeneratedCode,
+    testResult,
+    isEditMode,
   } = useBuilderStore();
 
   const [acknowledgedWarnings, setAcknowledgedWarnings] = useState(false);
+  const [isRunningInitialChecks, setIsRunningInitialChecks] = useState(false);
   
   // Compilation fix state
   const [fixStatus, setFixStatus] = useState<FixStatus>("idle");
@@ -79,6 +82,20 @@ export function ChecksStep() {
   const [securityFixStatus, setSecurityFixStatus] = useState<FixStatus>("idle");
   const [securityFixError, setSecurityFixError] = useState<string | null>(null);
   const [securityFixAttempts, setSecurityFixAttempts] = useState(0);
+
+  // Auto-run checks when component mounts if no checkResult exists
+  useEffect(() => {
+    if (!checkResult && generatedCode?.contracts.length && !isRunningInitialChecks) {
+      setIsRunningInitialChecks(true);
+      runChecks(generatedCode.contracts).then((result) => {
+        setCheckResult(result);
+        setIsRunningInitialChecks(false);
+      }).catch((error) => {
+        console.error("Error running initial checks:", error);
+        setIsRunningInitialChecks(false);
+      });
+    }
+  }, [checkResult, generatedCode, setCheckResult, isRunningInitialChecks]);
 
   const isFixing = fixStatus === "analyzing" || fixStatus === "fixing" || fixStatus === "verifying";
   const isFixingSecurity = securityFixStatus === "analyzing" || securityFixStatus === "fixing" || securityFixStatus === "verifying";
@@ -236,11 +253,31 @@ export function ChecksStep() {
 
   if (!checkResult) {
     return (
-      <div className="text-center">
-        <p>No check results available.</p>
-        <Button onClick={() => setStep("preview")} className="mt-4">
-          Back to Preview
-        </Button>
+      <div className="space-y-6">
+        <div className="text-center">
+          <h1 className="text-3xl font-bold mb-2">Pre-Deployment Checks</h1>
+          <p className="text-muted-foreground">
+            {isRunningInitialChecks ? "Running security and compilation checks..." : "Preparing checks..."}
+          </p>
+        </div>
+        
+        <Card>
+          <CardContent className="py-12 text-center">
+            {isRunningInitialChecks ? (
+              <div className="flex flex-col items-center gap-4">
+                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                <p className="text-muted-foreground">Compiling contracts and analyzing security...</p>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center gap-4">
+                <p>No check results available.</p>
+                <Button onClick={() => setStep("plan")}>
+                  Back to Plan
+                </Button>
+              </div>
+            )}
+          </CardContent>
+        </Card>
       </div>
     );
   }
@@ -266,6 +303,37 @@ export function ChecksStep() {
           Review the results before deploying
         </p>
       </div>
+
+      {/* Test Results Summary (from automated build) */}
+      {testResult && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              {testResult.success ? (
+                <span className="text-green-500">✓</span>
+              ) : (
+                <span className="text-yellow-500">⚠</span>
+              )}
+              Foundry Tests
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="h-5 w-5 text-green-500" />
+                <span className="text-green-600 font-medium">{testResult.passed} passed</span>
+              </div>
+              {testResult.failed > 0 && (
+                <div className="flex items-center gap-2">
+                  <XCircle className="h-5 w-5 text-red-500" />
+                  <span className="text-red-600 font-medium">{testResult.failed} failed</span>
+                </div>
+              )}
+              <Badge variant="outline">{testResult.totalTests} total tests</Badge>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Compilation */}
       <Card>
@@ -644,20 +712,27 @@ export function ChecksStep() {
           <div className="flex items-center justify-between">
             <div>
               <h4 className="font-medium">
-                {canDeploy ? "Ready for testing!" : "Cannot proceed yet"}
+                {canDeploy 
+                  ? (isEditMode ? "Ready to redeploy!" : "Ready to generate frontend!") 
+                  : "Cannot proceed yet"}
               </h4>
               <p className="text-sm text-muted-foreground">
                 {canDeploy
-                  ? "Run tests before deploying to " + selectedNetworkInfo?.name
+                  ? (isEditMode 
+                      ? "Checks passed! Your changes are ready to be deployed" 
+                      : "Tests passed! Now generate the frontend for your dApp")
                   : "Please fix the errors above before proceeding"}
               </p>
             </div>
             <div className="flex gap-2">
-              <Button variant="outline" onClick={() => setStep("preview")}>
-                ← Edit Code
+              <Button variant="outline" onClick={() => setStep(isEditMode ? "preview" : "plan")}>
+                ← {isEditMode ? "Back to Edit" : "Back to Plan"}
               </Button>
-              <Button onClick={() => setStep("testing")} disabled={!canDeploy}>
-                Run Tests →
+              <Button 
+                onClick={() => setStep(isEditMode ? "deploy" : "frontend")} 
+                disabled={!canDeploy}
+              >
+                {isEditMode ? "Deploy Changes →" : "Generate Frontend →"}
               </Button>
             </div>
           </div>

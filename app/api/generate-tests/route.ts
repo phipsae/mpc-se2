@@ -9,6 +9,27 @@ const GENERATE_TESTS_PROMPT = `You are an expert Solidity developer specializing
 
 Your task is to generate thorough unit tests for the provided Solidity contract(s) using Foundry/Forge.
 
+CRITICAL - YOU MUST WRITE SOLIDITY TESTS, NOT JAVASCRIPT/TYPESCRIPT:
+
+DO NOT USE (these are Hardhat/JavaScript patterns - ABSOLUTELY FORBIDDEN):
+- describe(), it(), expect(), before(), beforeEach()
+- chai, mocha, or any JavaScript/TypeScript testing library
+- ethers.getSigners(), ethers.getContractFactory()
+- loadFixture(), time.increase()
+- TypeScript or JavaScript syntax
+- .test.ts, .test.js, or .spec.ts file extensions
+- async/await in test functions
+- require("chai") or import from "chai"
+
+ONLY USE Foundry Solidity patterns:
+- function testXxx() public - all test functions start with "test"
+- function testFuzz_Xxx(uint256 x) public - fuzz tests  
+- vm.prank(addr), vm.startPrank(addr), vm.stopPrank()
+- vm.expectRevert(), vm.expectEmit()
+- assertEq(), assertTrue(), assertFalse(), assertGt(), assertLt()
+- makeAddr("name"), deal(addr, amount), hoax(addr, amount)
+- .t.sol file extension ONLY
+
 ## TEST REQUIREMENTS:
 - Test all public and external functions
 - Test access control (onlyOwner, roles, etc.)
@@ -57,27 +78,15 @@ contract ContractNameTest is Test {
 }
 \`\`\`
 
-## IMPORTANT FOUNDRY CONVENTIONS:
-- Import "forge-std/Test.sol" for testing utilities
-- Contract must inherit from Test
-- Use setUp() for initialization
-- Test functions must start with "test" or "testFuzz_" or "testFail_"
-- Use vm.prank(addr) to impersonate addresses
-- Use vm.expectRevert() before calls that should revert
-- Use makeAddr("name") to create test addresses
-- Use deal(addr, amount) to give ETH to addresses
-- Use assertEq, assertTrue, assertFalse for assertions
-- Use vm.expectEmit() for event testing
-
 ## OUTPUT FORMAT:
 You MUST output your response in this EXACT format:
 
 ---TEST: ContractName.t.sol---
 \`\`\`solidity
-// Full Foundry test code here
+// Full Foundry Solidity test code here
 \`\`\`
 
-Generate a test file for EACH contract provided.`;
+Generate a .t.sol test file for EACH contract provided. Tests MUST be in Solidity, NOT JavaScript.`;
 
 export async function POST(request: NextRequest) {
   try {
@@ -118,12 +127,27 @@ Create thorough tests that cover all functionality. Use the exact output format 
 
     const responseText = textContent.text;
 
-    // Parse tests from ---TEST: name.t.sol--- markers (Foundry tests)
+    // Parse tests from ---TEST: name.t.sol--- markers (Foundry Solidity tests ONLY)
     const tests: { name: string; content: string }[] = [];
     const testMatches = responseText.matchAll(
-      /---TEST:\s*([^\n-]+)---\s*```(?:solidity|typescript|ts)?\s*([\s\S]*?)```/gi
+      /---TEST:\s*([^\n-]+)---\s*```(?:solidity)?\s*([\s\S]*?)```/gi
     );
     for (const match of testMatches) {
+      const testContent = match[2].trim();
+      
+      // REJECT JavaScript/Hardhat tests - only accept Foundry Solidity tests
+      const isHardhatTest = testContent.includes('describe(') || 
+                            testContent.includes('it(') ||
+                            testContent.includes('require("chai")') ||
+                            testContent.includes("require('chai')") ||
+                            testContent.includes('from "hardhat"') ||
+                            testContent.includes('ethers.getSigners');
+      
+      if (isHardhatTest) {
+        console.warn('Rejected Hardhat/JavaScript test - only Foundry Solidity tests accepted');
+        continue;
+      }
+      
       let testName = match[1].trim();
       // Ensure .t.sol extension for Foundry tests
       if (!testName.endsWith('.t.sol')) {
@@ -131,21 +155,29 @@ Create thorough tests that cover all functionality. Use the exact output format 
       }
       tests.push({
         name: testName,
-        content: match[2].trim(),
+        content: testContent,
       });
     }
 
-    // Fallback: try to find any solidity code blocks that look like tests
+    // Fallback: try to find any Solidity code blocks that look like Foundry tests
     if (tests.length === 0) {
       const solBlocks = responseText.matchAll(/```(?:solidity)\s*([\s\S]*?)```/gi);
       let i = 0;
       for (const match of solBlocks) {
-        // Only include if it looks like a test (imports Test.sol)
-        if (match[1].includes('forge-std/Test.sol') || match[1].includes('is Test')) {
+        const content = match[1].trim();
+        
+        // REJECT if it's JavaScript/Hardhat
+        const isHardhatTest = content.includes('describe(') || 
+                              content.includes('it(') ||
+                              content.includes('require("chai")');
+        if (isHardhatTest) continue;
+        
+        // Only include if it looks like a Foundry test (imports Test.sol)
+        if (content.includes('forge-std/Test.sol') || content.includes('is Test')) {
           const originalName = contracts[i]?.name?.replace(".sol", "") || `Contract${i}`;
           tests.push({
             name: `${originalName}.t.sol`,
-            content: match[1].trim(),
+            content: content,
           });
           i++;
         }

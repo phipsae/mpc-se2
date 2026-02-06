@@ -4,13 +4,15 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 import { Sparkles, X, AlertCircle } from "lucide-react";
-import { useBuilderStore } from "@/lib/store";
+import { useBuilderStore, type GeneratedCode } from "@/lib/store";
+import { validateCode, isBuildServiceConfigured } from "@/lib/test-runner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { BuildProgressOverlay } from "./build-progress";
 
 // Dynamic import for Monaco to avoid SSR issues
 const Editor = dynamic(() => import("@monaco-editor/react"), { ssr: false });
@@ -29,6 +31,8 @@ export function PreviewStep() {
     plan,
     loadProject,
     currentProjectId,
+    setBuildProgress,
+    setTestResult,
   } = useBuilderStore();
 
   const [activeContract, setActiveContract] = useState(0);
@@ -36,6 +40,9 @@ export function PreviewStep() {
   const [activeTest, setActiveTest] = useState(0);
   const [modificationPrompt, setModificationPrompt] = useState("");
   const [isModifying, setIsModifying] = useState(false);
+  const [modificationError, setModificationError] = useState<string | null>(null);
+  
+  const buildServiceAvailable = isBuildServiceConfigured();
 
   const handleCompileAndCheck = async () => {
     if (!generatedCode) return;
@@ -92,9 +99,11 @@ export function PreviewStep() {
 
     setIsModifying(true);
     setIsLoading(true);
+    setModificationError(null);
     setLoadingMessage("AI is modifying your code...");
 
     try {
+      // Step 1: Get AI modifications
       const response = await fetch("/api/modify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -107,24 +116,87 @@ export function PreviewStep() {
 
       const data = await response.json();
 
-      if (data.status === "success" && data.fixedCode) {
-        // Update the generated code with AI modifications
-        setGeneratedCode({
-          ...generatedCode,
-          contracts: data.fixedCode.contracts || generatedCode.contracts,
-          pages: data.fixedCode.pages || generatedCode.pages,
+      if (data.status === "error") {
+        setModificationError(data.error || "AI modification failed");
+        return;
+      }
+
+      if (!data.fixedCode) {
+        setModificationError("No modifications returned from AI");
+        return;
+      }
+
+      // Create the modified code object
+      const modifiedCode: GeneratedCode = {
+        contracts: data.fixedCode.contracts || generatedCode.contracts,
+        pages: data.fixedCode.pages || generatedCode.pages,
+        tests: generatedCode.tests || [],
+      };
+
+      // Step 2: If build service is available, validate the modified code
+      if (buildServiceAvailable) {
+        setIsLoading(false); // Stop simple loading, show build progress instead
+        setLoadingMessage("");
+        
+        // Show build progress overlay
+        setBuildProgress({
+          status: "validating",
+          iteration: 0,
+          maxIterations: 10,
+          message: "Validating modified code...",
+          logs: ["Starting validation of modified code..."],
         });
+
+        // Run validation through compile → security → test loop
+        const validationResult = await validateCode(modifiedCode, (progress) => {
+          setBuildProgress(progress);
+        });
+
+        if (validationResult.success && validationResult.code) {
+          // Validation passed! Update with the validated (possibly further fixed) code
+          setGeneratedCode(validationResult.code);
+          setModificationPrompt("");
+          
+          // Also update test results if available
+          if (validationResult.testResult) {
+            setTestResult(validationResult.testResult);
+          }
+        } else {
+          // Validation failed
+          setModificationError(
+            validationResult.error || 
+            "Code validation failed. The modifications may have introduced errors."
+          );
+          // Still update the code so user can see what was generated
+          setGeneratedCode(modifiedCode);
+        }
+        
+        // Clear build progress
+        setBuildProgress(null);
+      } else {
+        // No build service - just apply modifications directly (old behavior)
+        setGeneratedCode(modifiedCode);
         setModificationPrompt("");
-      } else if (data.status === "error") {
-        console.error("Modification error:", data.error);
       }
     } catch (error) {
       console.error("Error modifying code:", error);
+      setModificationError(error instanceof Error ? error.message : "Unknown error");
     } finally {
       setIsModifying(false);
       setIsLoading(false);
       setLoadingMessage("");
     }
+  };
+
+  // Handle canceling the validation
+  const handleValidationCancel = () => {
+    setBuildProgress(null);
+    setIsModifying(false);
+  };
+
+  // Handle validation complete (success or failure)
+  const handleValidationComplete = () => {
+    setBuildProgress(null);
   };
 
   const updateContractCode = (value: string | undefined, index: number) => {
@@ -160,7 +232,14 @@ export function PreviewStep() {
   }
 
   return (
-    <div className="space-y-6">
+    <>
+      {/* Build Progress Overlay for validation */}
+      <BuildProgressOverlay
+        onCancel={handleValidationCancel}
+        onComplete={handleValidationComplete}
+      />
+      
+      <div className="space-y-6">
       {/* Edit Mode Header */}
       {isEditMode && (
         <Alert className="border-primary/50 bg-primary/5">
@@ -180,12 +259,12 @@ export function PreviewStep() {
 
       <div className="text-center">
         <h1 className="text-3xl font-bold mb-2">
-          {isEditMode ? "Edit Your Code" : "Review Generated Code"}
+          {isEditMode ? "Edit Your Code" : "Review Your dApp"}
         </h1>
         <p className="text-muted-foreground">
           {isEditMode 
             ? "Make changes manually or describe what you want to modify" 
-            : "You can edit the code before deployment"}
+            : "Your contracts have been tested. Review the code before deployment."}
         </p>
       </div>
 
@@ -198,13 +277,23 @@ export function PreviewStep() {
           </CardTitle>
           <CardDescription>
             Describe the changes you want to make and AI will update your code
+            {buildServiceAvailable && " (changes will be validated automatically)"}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
+          {modificationError && (
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>{modificationError}</AlertDescription>
+            </Alert>
+          )}
           <Textarea
             placeholder="Example: Add a pause function that only the owner can call, or Change the mint price to 0.1 ETH..."
             value={modificationPrompt}
-            onChange={(e) => setModificationPrompt(e.target.value)}
+            onChange={(e) => {
+              setModificationPrompt(e.target.value);
+              setModificationError(null); // Clear error when user types
+            }}
             className="min-h-[80px] resize-none"
           />
           <Button 
@@ -213,7 +302,9 @@ export function PreviewStep() {
             className="w-full"
           >
             <Sparkles className="h-4 w-4 mr-2" />
-            {isModifying ? "Modifying..." : "Apply AI Changes"}
+            {isModifying 
+              ? (buildServiceAvailable ? "Modifying & Validating..." : "Modifying...") 
+              : (buildServiceAvailable ? "Apply & Validate Changes" : "Apply AI Changes")}
           </Button>
         </CardContent>
       </Card>
@@ -371,12 +462,12 @@ export function PreviewStep() {
           <div className="flex items-center justify-between">
             <div>
               <h4 className="font-medium">
-                {isEditMode ? "Ready to recompile?" : "Ready to compile?"}
+                {isEditMode ? "Ready to recompile?" : "Ready to deploy?"}
               </h4>
               <p className="text-sm text-muted-foreground">
                 {isEditMode 
                   ? "We'll recompile and verify your changes" 
-                  : "We'll compile the contract and run security checks"}
+                  : "Your code has been tested and is ready for deployment"}
               </p>
             </div>
             <div className="flex gap-2">
@@ -391,11 +482,11 @@ export function PreviewStep() {
                 </>
               ) : (
                 <>
-                  <Button variant="outline" onClick={() => setStep("plan")}>
-                    ← Back to Plan
+                  <Button variant="outline" onClick={() => setStep("frontend")}>
+                    ← Back
                   </Button>
-                  <Button onClick={handleCompileAndCheck}>
-                    Compile & Check →
+                  <Button onClick={() => setStep("deploy")}>
+                    Deploy →
                   </Button>
                 </>
               )}
@@ -404,5 +495,6 @@ export function PreviewStep() {
         </CardContent>
       </Card>
     </div>
+    </>
   );
 }

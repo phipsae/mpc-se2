@@ -67,6 +67,102 @@ async function getSE2Docs(): Promise<string> {
   return "";
 }
 
+// System prompt for contracts-only generation (used in new flow)
+const GENERATE_CONTRACTS_ONLY_PROMPT = `You are an expert Solidity developer specializing in secure smart contract development.
+
+Your task is to generate production-ready Solidity contracts and comprehensive Foundry tests.
+DO NOT generate any React/frontend code - only contracts and tests.
+
+## SOLIDITY REQUIREMENTS:
+- Use Solidity ^0.8.20 or later
+- ALWAYS import from OpenZeppelin v5 when possible (ERC20, ERC721, ERC1155, Ownable, ReentrancyGuard, etc.)
+- Include NatSpec comments for all public functions
+- Follow security best practices (checks-effects-interactions pattern)
+- Add appropriate access control
+- Use call{value: x}() instead of transfer/send
+
+## TEST REQUIREMENTS - FOUNDRY SOLIDITY TESTS ONLY:
+Generate comprehensive Foundry/Forge tests in SOLIDITY that cover:
+1. Basic functionality tests
+2. Access control tests (non-owner calling owner functions should revert)
+3. Edge cases (zero address, max uint256, empty arrays)
+4. Reentrancy attack simulation tests
+5. Event emission tests
+6. State change verification
+
+CRITICAL - DO NOT USE (these are Hardhat/JavaScript patterns - NEVER use them):
+- describe(), it(), expect(), before(), beforeEach()
+- chai, mocha, or any JavaScript testing library
+- ethers.getSigners(), ethers.getContractFactory()
+- loadFixture(), time.increase()
+- TypeScript or JavaScript - tests MUST be Solidity
+- .test.ts, .test.js, or .spec.ts extensions
+
+ONLY USE Foundry Solidity patterns:
+- function testXxx() public - all test functions start with "test"
+- function testFuzz_Xxx(uint256 x) public - fuzz tests
+- vm.prank(addr), vm.startPrank(addr), vm.stopPrank()
+- vm.expectRevert(), vm.expectEmit()
+- assertEq(), assertTrue(), assertFalse(), assertGt(), assertLt()
+- makeAddr("name"), deal(addr, amount), hoax(addr, amount)
+- .t.sol file extension ONLY
+
+Test file structure (MUST follow this exact pattern):
+\`\`\`solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+import "forge-std/Test.sol";
+import "../src/ContractName.sol";
+
+contract ContractNameTest is Test {
+    ContractName public contractInstance;
+    address public owner;
+    address public user1;
+    address public attacker;
+
+    function setUp() public {
+        owner = address(this);
+        user1 = makeAddr("user1");
+        attacker = makeAddr("attacker");
+        
+        contractInstance = new ContractName(/* constructor args */);
+    }
+
+    function testDeployment() public view {
+        assertEq(contractInstance.owner(), owner);
+    }
+
+    function testUnauthorizedAccess() public {
+        vm.prank(user1);
+        vm.expectRevert();
+        contractInstance.ownerOnlyFunction();
+    }
+
+    function testFuzz_SomeFunction(uint256 amount) public {
+        vm.assume(amount > 0 && amount < 1e18);
+        // fuzz test logic
+    }
+}
+\`\`\`
+
+## OUTPUT FORMAT:
+You MUST output your response in this EXACT format using code fence markers:
+
+---CONTRACT: ContractName.sol---
+\`\`\`solidity
+// Full contract code here
+\`\`\`
+
+---TEST: ContractName.t.sol---
+\`\`\`solidity
+// Full Foundry test code here
+\`\`\`
+
+You can include multiple contracts and test files. Each must be preceded by the marker line.
+IMPORTANT: DO NOT generate any ---PAGE: markers or React code.`;
+
+// System prompt for full generation (backward compatible)
 const GENERATE_SYSTEM_PROMPT = `You are an expert Solidity and React developer specializing in Scaffold-ETH 2 projects.
 
 Your task is to generate production-ready code based on the user's requirements.
@@ -91,13 +187,23 @@ KEY SE2 PATTERNS TO USE:
 - <EtherInput /> for ETH amount inputs
 - Use TailwindCSS and daisyUI for styling
 
-## TEST REQUIREMENTS:
-You MUST also generate comprehensive Foundry/Forge unit tests for each contract:
-- Test all public functions
-- Test access control (onlyOwner, etc.)
-- Test edge cases and error conditions
-- Test events are emitted correctly
-- Use fuzz testing where appropriate
+## TEST REQUIREMENTS - FOUNDRY ONLY:
+You MUST generate comprehensive Foundry/Forge unit tests in SOLIDITY for each contract.
+
+CRITICAL - DO NOT USE (these are Hardhat/JavaScript patterns):
+- describe(), it(), expect() 
+- chai or mocha
+- ethers.getSigners()
+- loadFixture()
+- TypeScript or JavaScript test files
+- .test.ts or .test.js extensions
+
+ONLY USE Foundry patterns:
+- function testXxx() public - test functions start with "test"
+- vm.prank(), vm.expectRevert(), vm.expectEmit()
+- assertEq(), assertTrue(), assertFalse()
+- makeAddr("name"), deal(addr, amount)
+- .t.sol file extension
 
 Foundry test file structure:
 \`\`\`solidity
@@ -130,12 +236,6 @@ contract ContractNameTest is Test {
 }
 \`\`\`
 
-Foundry conventions:
-- Import "forge-std/Test.sol" and inherit from Test
-- Use vm.prank(addr) to impersonate, vm.expectRevert() for reverts
-- Use makeAddr("name") for addresses, deal(addr, amount) for ETH
-- Test functions must start with "test"
-
 ## OUTPUT FORMAT:
 You MUST output your response in this EXACT format using code fence markers:
 
@@ -166,7 +266,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { prompt, answers, plan } = body;
+    const { prompt, answers, plan, mode = "all" } = body;
 
     if (!prompt || !plan) {
       return NextResponse.json(
@@ -175,11 +275,31 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Get SE2 docs
-    const se2Docs = await getSE2Docs();
-    const systemPrompt = GENERATE_SYSTEM_PROMPT.replace("{SE2_DOCS}", se2Docs);
+    // Use contracts-only prompt if mode is "contracts"
+    const isContractsOnly = mode === "contracts";
+    let systemPrompt: string;
+    
+    if (isContractsOnly) {
+      systemPrompt = GENERATE_CONTRACTS_ONLY_PROMPT;
+    } else {
+      // Get SE2 docs for full generation
+      const se2Docs = await getSE2Docs();
+      systemPrompt = GENERATE_SYSTEM_PROMPT.replace("{SE2_DOCS}", se2Docs);
+    }
 
-    const userMessage = `Create a dApp based on this plan:
+    const userMessage = isContractsOnly 
+      ? `Create smart contracts and Foundry tests based on this plan:
+
+Contract Name: ${plan.contractName}
+Description: ${plan.description}
+Features: ${plan.features.join(", ")}
+
+Original user request: ${prompt}
+
+${answers ? `Additional details from user:\n${JSON.stringify(answers, null, 2)}` : ""}
+
+Generate the complete Solidity contract(s) and comprehensive Foundry tests. DO NOT generate any React/frontend code.`
+      : `Create a dApp based on this plan:
 
 Contract Name: ${plan.contractName}
 Description: ${plan.description}
@@ -232,10 +352,25 @@ Generate the complete Solidity contract(s) and React page(s).`;
       });
     }
 
-    // Parse tests from ---TEST: name.t.sol--- markers (Foundry tests)
+    // Parse tests from ---TEST: name.t.sol--- markers (Foundry tests ONLY - Solidity)
     const tests: { name: string; content: string }[] = [];
-    const testMatches = responseText.matchAll(/---TEST:\s*([^\n-]+)---\s*```(?:solidity|typescript|ts)?\s*([\s\S]*?)```/gi);
+    const testMatches = responseText.matchAll(/---TEST:\s*([^\n-]+)---\s*```(?:solidity)?\s*([\s\S]*?)```/gi);
     for (const match of testMatches) {
+      const testContent = match[2].trim();
+      
+      // REJECT JavaScript/Hardhat tests - only accept Foundry Solidity tests
+      const isHardhatTest = testContent.includes('describe(') || 
+                            testContent.includes('it(') ||
+                            testContent.includes('require("chai")') ||
+                            testContent.includes("require('chai')") ||
+                            testContent.includes('from "hardhat"') ||
+                            testContent.includes('ethers.getSigners');
+      
+      if (isHardhatTest) {
+        console.warn('Rejected Hardhat/JavaScript test - only Foundry Solidity tests accepted');
+        continue;
+      }
+      
       let testName = match[1].trim();
       // Ensure .t.sol extension for Foundry tests
       if (!testName.endsWith('.t.sol')) {
@@ -243,7 +378,7 @@ Generate the complete Solidity contract(s) and React page(s).`;
       }
       tests.push({
         name: testName,
-        content: match[2].trim(),
+        content: testContent,
       });
     }
 
@@ -273,8 +408,13 @@ Generate the complete Solidity contract(s) and React page(s).`;
       }
     }
 
-    if (contracts.length === 0 && pages.length === 0) {
-      throw new Error("Could not extract any code from Claude's response");
+    // In contracts-only mode, we don't require pages
+    if (contracts.length === 0) {
+      throw new Error("Could not extract any contracts from Claude's response");
+    }
+    
+    if (!isContractsOnly && pages.length === 0) {
+      throw new Error("Could not extract any pages from Claude's response");
     }
 
     // Generate fallback tests if none were generated (Foundry format)
@@ -283,7 +423,12 @@ Generate the complete Solidity contract(s) and React page(s).`;
       content: generateFallbackTest(contract.name.replace(".sol", ""), contract.content),
     }));
 
-    const code = { contracts, pages, tests: finalTests };
+    // In contracts-only mode, return empty pages array
+    const code = { 
+      contracts, 
+      pages: isContractsOnly ? [] : pages, 
+      tests: finalTests 
+    };
 
     return NextResponse.json({ success: true, code });
   } catch (error) {

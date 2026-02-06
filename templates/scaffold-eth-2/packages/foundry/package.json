@@ -1,0 +1,12 @@
+{
+  "name": "@se2/foundry",
+  "version": "0.0.1",
+  "scripts": {
+    "build": "forge build",
+    "test": "forge test -vvv",
+    "deploy": "forge script script/Deploy.s.sol --broadcast",
+    "deploy:sepolia": "forge script script/Deploy.s.sol --rpc-url sepolia --broadcast --verify",
+    "deploy:baseSepolia": "forge script script/Deploy.s.sol --rpc-url baseSepolia --broadcast --verify"
+  },
+  "dependencies": {}
+}

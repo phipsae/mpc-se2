@@ -9,19 +9,19 @@ import { ClarificationStep } from "@/components/builder/clarification-step";
 import { PlanStep } from "@/components/builder/plan-step";
 import { PreviewStep } from "@/components/builder/preview-step";
 import { ChecksStep } from "@/components/builder/checks-step";
-import { TestingStep } from "@/components/builder/testing-step";
+import { FrontendStep } from "@/components/builder/frontend-step";
 import { DeployStep } from "@/components/builder/deploy-step";
 import { ResultsStep } from "@/components/builder/results-step";
 import { Progress } from "@/components/ui/progress";
 
+// Visible steps shown in progress bar (testing is automated, not shown)
 const STEPS = [
   { id: "prompt", label: "Prompt", number: 1 },
   { id: "clarification", label: "Clarify", number: 2 },
-  { id: "plan", label: "Plan", number: 3 },
-  { id: "generate", label: "Generate", number: 4 },
-  { id: "preview", label: "Preview", number: 4 },
-  { id: "checks", label: "Checks", number: 5 },
-  { id: "testing", label: "Testing", number: 6 },
+  { id: "plan", label: "Build & Test", number: 3 },  // Automated build happens here
+  { id: "checks", label: "Checks", number: 4 },
+  { id: "frontend", label: "Frontend", number: 5 },
+  { id: "preview", label: "Preview", number: 6 },
   { id: "deploy", label: "Deploy", number: 7 },
   { id: "github", label: "GitHub", number: 8 },
   { id: "vercel", label: "Vercel", number: 9 },
@@ -32,9 +32,9 @@ const STEPS = [
 const AUTO_SAVE_STEPS: BuilderStep[] = [
   "clarification",
   "plan",
-  "preview",
   "checks",
-  "testing",
+  "frontend",
+  "preview",
   "deploy",
   "github",
   "vercel",
@@ -61,7 +61,9 @@ export default function BuilderPage() {
     previousStep.current = step;
   }, [step, prompt, saveDraft, isEditMode]);
 
-  const currentStepIndex = STEPS.findIndex((s) => s.id === step);
+  // Map internal steps to their visible counterpart
+  const visibleStep = step === "generate" || step === "testing" ? "plan" : step;
+  const currentStepIndex = Math.max(0, STEPS.findIndex((s) => s.id === visibleStep));
   const progress = ((currentStepIndex + 1) / STEPS.length) * 100;
 
   const renderStep = () => {
@@ -71,14 +73,17 @@ export default function BuilderPage() {
       case "clarification":
         return <ClarificationStep />;
       case "plan":
-        return <PlanStep />;
       case "generate":
-      case "preview":
-        return <PreviewStep />;
+      case "testing":
+        // Plan step handles automated build & test
+        // Generate and testing are now internal states
+        return <PlanStep />;
       case "checks":
         return <ChecksStep />;
-      case "testing":
-        return <TestingStep />;
+      case "frontend":
+        return <FrontendStep />;
+      case "preview":
+        return <PreviewStep />;
       case "deploy":
       case "github":
       case "vercel":

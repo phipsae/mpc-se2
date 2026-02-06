@@ -27,6 +27,7 @@ export function PromptStep() {
     setGeneratedCode,
     setTestResult,
     setCheckResult,
+    setProjectName,
   } = useBuilderStore();
   const [localPrompt, setLocalPrompt] = useState(prompt);
   const [error, setError] = useState<string | null>(null);
@@ -73,6 +74,10 @@ export function PromptStep() {
 
       const plan = analyzeData.plan;
       setPlan(plan);
+      // Set project name from AI suggestion
+      if (plan.suggestedProjectName) {
+        setProjectName(plan.suggestedProjectName);
+      }
       setIsLoading(false);
 
       // Now start the automated build
@@ -159,6 +164,10 @@ export function PromptStep() {
         setStep("clarification");
       } else if (data.status === "ready") {
         setPlan(data.plan);
+        // Set project name from AI suggestion
+        if (data.plan.suggestedProjectName) {
+          setProjectName(data.plan.suggestedProjectName);
+        }
         setStep("plan");
       } else {
         // Handle unexpected response

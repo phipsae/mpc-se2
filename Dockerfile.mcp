@@ -1,0 +1,63 @@
+# ============================================================================
+# Multi-stage Dockerfile for MPC-SE2 MCP Server
+# ============================================================================
+
+# --- Builder stage ---
+FROM node:20-slim AS builder
+
+WORKDIR /app
+
+# Install yarn
+RUN corepack enable && corepack prepare yarn@4.9.1 --activate
+
+# Copy workspace config
+COPY package.json yarn.lock .yarnrc.yml ./
+COPY packages/core/package.json packages/core/
+COPY packages/mcp-server/package.json packages/mcp-server/
+
+# Install dependencies
+RUN yarn install --immutable
+
+# Copy source
+COPY tsconfig.base.json ./
+COPY packages/core/ packages/core/
+COPY packages/mcp-server/ packages/mcp-server/
+
+# Build core first, then mcp-server
+RUN yarn workspace @mpc-se2/core build && yarn workspace @mpc-se2/mcp-server build
+
+# --- Runtime stage ---
+FROM node:20-slim
+
+WORKDIR /app
+
+# Install Foundry (forge + anvil)
+RUN apt-get update && apt-get install -y curl git && \
+    curl -L https://foundry.paradigm.xyz | bash && \
+    /root/.foundry/bin/foundryup && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+ENV PATH="/root/.foundry/bin:${PATH}"
+
+# Install yarn
+RUN corepack enable && corepack prepare yarn@4.9.1 --activate
+
+# Copy workspace config for production install
+COPY package.json yarn.lock .yarnrc.yml ./
+COPY packages/core/package.json packages/core/
+COPY packages/mcp-server/package.json packages/mcp-server/
+
+# Install production dependencies only
+RUN yarn workspaces focus @mpc-se2/mcp-server --production || yarn install
+
+# Copy built output
+COPY --from=builder /app/packages/core/dist/ packages/core/dist/
+COPY --from=builder /app/packages/mcp-server/dist/ packages/mcp-server/dist/
+
+# Copy SE2 template (needed for assemble_project)
+COPY templates/scaffold-eth-2/ templates/scaffold-eth-2/
+
+EXPOSE 3000
+
+ENV PORT=3000
+CMD ["node", "packages/mcp-server/dist/index.js"]

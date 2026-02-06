@@ -321,8 +321,33 @@ contract ContractNameTest is Test {
 // Foundry Solidity test code - NO JavaScript
 \`\`\``;
 
-async function generateCode(prompt, plan) {
-  const userMessage = `Create a dApp based on this plan:
+async function generateCode(prompt, plan, existingContracts = null) {
+  let userMessage;
+  
+  if (existingContracts && existingContracts.length > 0) {
+    // Test-only generation mode: we have contracts, just need tests
+    const contractsText = existingContracts
+      .map(c => `--- ${c.name} ---\n${c.content}`)
+      .join("\n\n");
+    
+    userMessage = `Generate Foundry/Forge tests for the following Solidity contracts:
+
+${contractsText}
+
+YOU MUST generate test file(s) using ---TEST: filename.t.sol--- markers.
+
+The test file MUST:
+- Be written in Solidity (NOT JavaScript/TypeScript)
+- Import "forge-std/Test.sol"
+- Inherit from Test contract
+- Use function testXxx() naming convention
+- Test all major functionality of each contract
+- Include deployment tests, access control tests, and edge cases
+
+Do NOT generate new contracts or pages - ONLY tests.`;
+  } else {
+    // Full generation mode
+    userMessage = `Create a dApp based on this plan:
 
 Contract Name: ${plan.contractName}
 Description: ${plan.description}
@@ -343,6 +368,7 @@ The test file MUST:
 - Test all major functionality of the contract
 
 Do NOT skip the test file - it is required.`;
+  }
 
   const message = await anthropic.messages.create({
     model: "claude-sonnet-4-20250514",
@@ -626,13 +652,24 @@ async function fixTestFailures(contracts, tests, testOutput) {
 }
 
 // Build endpoint with Server-Sent Events for real-time progress
+// Accepts either:
+//   - prompt + plan: generates new code, then validates
+//   - existingCode: skips generation, just validates the provided code
 app.post("/build", async (req, res) => {
-  const { prompt, plan } = req.body;
+  const { prompt, plan, existingCode } = req.body;
   
-  if (!prompt || !plan) {
-    return res.status(400).json({ success: false, error: "Prompt and plan required" });
+  // Validate input: need either existingCode OR (prompt AND plan)
+  const hasExistingCode = existingCode && existingCode.contracts && existingCode.contracts.length > 0;
+  const hasPromptAndPlan = prompt && plan;
+  
+  if (!hasExistingCode && !hasPromptAndPlan) {
+    return res.status(400).json({ 
+      success: false, 
+      error: "Either existingCode or (prompt and plan) required" 
+    });
   }
   
+  // Only need ANTHROPIC_API_KEY if we're generating or might need to fix code
   if (!process.env.ANTHROPIC_API_KEY) {
     return res.status(500).json({ success: false, error: "ANTHROPIC_API_KEY not configured" });
   }
@@ -676,14 +713,43 @@ app.post("/build", async (req, res) => {
   const startTime = Date.now();
   
   try {
-    // Step 1: Generate code
-    setStatus("generating");
-    log("Generating code with Claude...");
-    let { contracts, pages, tests } = await generateCode(prompt, plan);
-    log(`Generated ${contracts.length} contracts, ${pages.length} pages, ${tests.length} tests`);
+    // Step 1: Generate code OR use existing code
+    let contracts, pages, tests;
+    
+    if (existingCode && existingCode.contracts && existingCode.contracts.length > 0) {
+      // Validation mode: use existing code
+      setStatus("validating");
+      log("Validating existing code...");
+      contracts = existingCode.contracts;
+      pages = existingCode.pages || [];
+      tests = existingCode.tests || [];
+      log(`Received ${contracts.length} contracts, ${pages.length} pages, ${tests.length} tests for validation`);
+      
+      // If no tests provided, we'll need to generate them
+      if (tests.length === 0) {
+        setStatus("generating");
+        log("No tests provided, generating tests...");
+        const generated = await generateCode(
+          `Generate Foundry tests for the following contracts. Do NOT generate new contracts or pages, ONLY tests.`,
+          { contractName: contracts[0]?.name?.replace('.sol', '') || 'Contract', description: 'Validate existing contracts', features: [], pages: [] },
+          contracts // Pass existing contracts for context
+        );
+        tests = generated.tests;
+        log(`Generated ${tests.length} tests`);
+      }
+    } else {
+      // Generation mode: generate new code
+      setStatus("generating");
+      log("Generating code with Claude...");
+      const generated = await generateCode(prompt, plan);
+      contracts = generated.contracts;
+      pages = generated.pages;
+      tests = generated.tests;
+      log(`Generated ${contracts.length} contracts, ${pages.length} pages, ${tests.length} tests`);
+    }
     
     if (contracts.length === 0) {
-      throw new Error("No contracts generated");
+      throw new Error("No contracts to validate");
     }
     
     // Step 2: Compile with retries

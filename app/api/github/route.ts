@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth/auth";
-import { createRepoAndPushFiles, generateRepoName } from "@/lib/github";
+import { createRepoAndPushFiles, updateRepoFiles, generateRepoName } from "@/lib/github";
 import { assembleProject, getAllFiles, cleanupProject } from "@/lib/assembler";
 import type { GeneratedCode, DeploymentInfo } from "@/lib/assembler";
 
@@ -17,12 +17,14 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { generatedCode, contractAddress, networkId, contractName, abi } = body as {
+    const { generatedCode, contractAddress, networkId, contractName, abi, projectName, existingRepo } = body as {
       generatedCode: GeneratedCode;
       contractAddress?: string;
       networkId?: number;
       contractName?: string;
       abi?: unknown[];
+      projectName?: string; // User-chosen project name
+      existingRepo?: { url: string; name: string }; // Existing repo to update instead of creating new
     };
 
     if (!generatedCode) {
@@ -51,18 +53,45 @@ export async function POST(request: NextRequest) {
 
     // Get all files from the assembled project
     const files = await getAllFiles(projectPath);
+    const filesToCommit = files.map((f) => ({ path: f.relativePath, content: f.content }));
 
-    // Generate repository name from the first contract
-    const repoBaseName = generatedCode.contracts[0]?.name.replace(".sol", "") || "my-dapp";
-    const repoName = generateRepoName(repoBaseName);
+    let result;
 
-    // Create the repository and push files
-    const result = await createRepoAndPushFiles(
-      session.githubAccessToken,
-      repoName,
-      `A dApp built with AI dApp Builder - Scaffold-ETH 2`,
-      files.map((f) => ({ path: f.relativePath, content: f.content }))
-    );
+    // If existingRepo is provided, update it instead of creating a new one
+    if (existingRepo?.url) {
+      console.log(`Updating existing repository: ${existingRepo.url}`);
+      result = await updateRepoFiles(
+        session.githubAccessToken,
+        existingRepo.url,
+        filesToCommit,
+        "Update from AI dApp Builder"
+      );
+    } else {
+      // Use user-provided project name, or generate one from the contract
+      let repoName: string;
+      if (projectName && projectName.trim()) {
+        // Sanitize the user-provided name
+        repoName = projectName
+          .toLowerCase()
+          .replace(/[^a-z0-9-]/g, "-")
+          .replace(/--+/g, "-")
+          .replace(/^-|-$/g, "")
+          .slice(0, 100); // GitHub repo names have a max length
+      } else {
+        // Fall back to generated name
+        const repoBaseName = generatedCode.contracts[0]?.name.replace(".sol", "") || "my-dapp";
+        repoName = generateRepoName(repoBaseName);
+      }
+
+      // Create the repository and push files
+      console.log(`Creating new repository: ${repoName}`);
+      result = await createRepoAndPushFiles(
+        session.githubAccessToken,
+        repoName,
+        `A dApp built with AI dApp Builder - Scaffold-ETH 2 with Foundry`,
+        filesToCommit
+      );
+    }
 
     // Clean up the temporary project
     await cleanupProject(projectPath);

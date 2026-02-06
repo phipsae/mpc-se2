@@ -6,9 +6,10 @@ export type BuilderStep =
   | "clarification"
   | "plan"
   | "generate"
+  | "testing"    // Now runs right after generate (before checks)
+  | "checks"     // Security/gas checks after tests pass
+  | "frontend"   // NEW: Generate frontend after checks pass
   | "preview"
-  | "checks"
-  | "testing"
   | "deploy"
   | "github"
   | "vercel"
@@ -27,6 +28,7 @@ export interface ProjectPlan {
   description: string;
   features: string[];
   pages: { path: string; description: string }[];
+  suggestedProjectName?: string; // AI-generated project name suggestion
 }
 
 export interface GeneratedCode {
@@ -102,6 +104,7 @@ export interface SavedProject {
 export type BuildProgressStatus =
   | "idle"
   | "generating"
+  | "validating"
   | "compiling"
   | "fixing_compilation"
   | "checking_security"
@@ -154,6 +157,12 @@ export interface BuilderState {
   generatedCode: GeneratedCode | null;
   setGeneratedCode: (code: GeneratedCode | null) => void;
 
+  // Original code tracking (for change detection in edit mode)
+  originalGeneratedCode: GeneratedCode | null;
+  setOriginalGeneratedCode: (code: GeneratedCode | null) => void;
+  hasContractChanges: () => boolean;
+  hasFrontendOnlyChanges: () => boolean;
+
   // Checks
   checkResult: CheckResult | null;
   setCheckResult: (result: CheckResult | null) => void;
@@ -172,6 +181,8 @@ export interface BuilderState {
   setDeployment: (deployment: DeploymentResult | null) => void;
 
   // GitHub
+  projectName: string; // User-editable project name for GitHub
+  setProjectName: (name: string) => void;
   githubRepo: { url: string; name: string } | null;
   setGithubRepo: (repo: { url: string; name: string } | null) => void;
 
@@ -219,11 +230,13 @@ const initialBuilderState = {
   answers: {} as Record<string, string | number | boolean>,
   plan: null as ProjectPlan | null,
   generatedCode: null as GeneratedCode | null,
+  originalGeneratedCode: null as GeneratedCode | null,
   checkResult: null as CheckResult | null,
   testResult: null as TestResult | null,
   testOutput: "",
   selectedNetwork: 11155111, // Sepolia
   deployment: null as DeploymentResult | null,
+  projectName: "",
   githubRepo: null as { url: string; name: string } | null,
   vercelDeployment: null as { url: string; projectId: string } | null,
   isLoading: false,
@@ -247,12 +260,37 @@ export const useBuilderStore = create<BuilderState>()(
         set((state) => ({ answers: { ...state.answers, [id]: value } })),
       setPlan: (plan) => set({ plan }),
       setGeneratedCode: (generatedCode) => set({ generatedCode }),
+      setOriginalGeneratedCode: (originalGeneratedCode) => set({ originalGeneratedCode }),
+      
+      // Change detection helpers for edit mode
+      hasContractChanges: () => {
+        const { originalGeneratedCode, generatedCode } = get();
+        // If no original code (new project), assume changed
+        if (!originalGeneratedCode || !generatedCode) return true;
+        // Compare contracts by content
+        return JSON.stringify(originalGeneratedCode.contracts) !== 
+               JSON.stringify(generatedCode.contracts);
+      },
+      
+      hasFrontendOnlyChanges: () => {
+        const state = get();
+        // Must be in edit mode with no contract changes
+        if (!state.isEditMode) return false;
+        const hasContractChanges = JSON.stringify(state.originalGeneratedCode?.contracts) !== 
+                                   JSON.stringify(state.generatedCode?.contracts);
+        if (hasContractChanges) return false;
+        // Check if pages have changed
+        return JSON.stringify(state.originalGeneratedCode?.pages) !== 
+               JSON.stringify(state.generatedCode?.pages);
+      },
+
       setCheckResult: (checkResult) => set({ checkResult }),
       setTestResult: (testResult) => set({ testResult }),
       setTestOutput: (testOutput) => set({ testOutput }),
       appendTestOutput: (output) => set((state) => ({ testOutput: state.testOutput + output })),
       setSelectedNetwork: (selectedNetwork) => set({ selectedNetwork }),
       setDeployment: (deployment) => set({ deployment }),
+      setProjectName: (projectName) => set({ projectName }),
       setGithubRepo: (githubRepo) => set({ githubRepo }),
       setVercelDeployment: (vercelDeployment) => set({ vercelDeployment }),
       setIsLoading: (isLoading) => set({ isLoading }),
@@ -495,6 +533,7 @@ export const useBuilderStore = create<BuilderState>()(
           prompt: project.prompt,
           plan: project.plan,
           generatedCode: project.generatedCode,
+          originalGeneratedCode: project.generatedCode, // Save snapshot for change detection
           deployment: project.deployment,
           githubRepo: project.githubRepo,
           vercelDeployment: project.vercelDeployment,
@@ -523,11 +562,13 @@ export const useBuilderStore = create<BuilderState>()(
           ...initialBuilderState,
           currentProjectId: null,
           isEditMode: false,
+          originalGeneratedCode: null,
         }),
 
       clearCurrentSession: () =>
         set({
           ...initialBuilderState,
+          originalGeneratedCode: null,
           // Keep currentProjectId to maintain reference
         }),
     }),

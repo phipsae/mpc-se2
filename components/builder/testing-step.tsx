@@ -31,7 +31,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 
-type TestingStatus = "idle" | "connecting" | "running" | "done";
+type TestingStatus = "idle" | "connecting" | "running" | "done" | "booting";
 
 export function TestingStep() {
   const {
@@ -99,12 +99,14 @@ export function TestingStep() {
 
   const handleSkipTests = () => {
     if (acknowledgedSkip) {
-      setStep("deploy");
+      // Skip to checks (then frontend, then deploy)
+      setStep("checks");
     }
   };
 
   const handleContinue = () => {
-    setStep("deploy");
+    // After tests pass, go to security checks
+    setStep("checks");
   };
 
   const getStatusMessage = () => {
@@ -209,11 +211,11 @@ export function TestingStep() {
                 You can proceed to deployment without tests.
               </p>
               <div className="flex gap-2">
-                <Button variant="outline" onClick={() => setStep("checks")}>
-                  Back to Checks
+                <Button variant="outline" onClick={() => setStep("plan")}>
+                  Back to Plan
                 </Button>
-                <Button onClick={() => setStep("deploy")}>
-                  Continue to Deploy
+                <Button onClick={() => setStep("checks")}>
+                  Continue to Checks
                 </Button>
               </div>
             </div>
@@ -228,7 +230,7 @@ export function TestingStep() {
       <div className="text-center">
         <h1 className="text-3xl font-bold mb-2">Smart Contract Testing</h1>
         <p className="text-muted-foreground">
-          Run unit tests using the remote Hardhat test service
+          Run Foundry tests to verify your contracts before proceeding
         </p>
       </div>
 
@@ -408,7 +410,7 @@ export function TestingStep() {
               Skip Tests
             </CardTitle>
             <CardDescription>
-              You can skip testing and proceed to deployment, but this is not
+              You can skip testing and proceed to checks, but this is not
               recommended.
             </CardDescription>
           </CardHeader>
@@ -456,21 +458,21 @@ export function TestingStep() {
               </h4>
               <p className="text-sm text-muted-foreground">
                 {canDeploy
-                  ? "You can proceed to deployment"
+                  ? "You can proceed to security checks"
                   : "Tests must pass or be acknowledged to continue"}
               </p>
             </div>
             <div className="flex gap-2">
-              <Button variant="outline" onClick={() => setStep("checks")}>
-                Back to Checks
+              <Button variant="outline" onClick={() => setStep("plan")}>
+                ← Back to Plan
               </Button>
               {acknowledgedSkip && !testResult?.success ? (
                 <Button variant="destructive" onClick={handleSkipTests}>
-                  Skip Tests & Deploy
+                  Skip Tests & Continue
                 </Button>
               ) : (
                 <Button onClick={handleContinue} disabled={!canDeploy}>
-                  Continue to Deploy
+                  Continue to Checks →
                 </Button>
               )}
             </div>

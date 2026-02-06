@@ -5,6 +5,7 @@ import os from "os";
 export interface GeneratedCode {
   contracts: { name: string; content: string }[];
   pages: { path: string; content: string }[];
+  tests?: { name: string; content: string }[];
 }
 
 export interface DeploymentInfo {
@@ -35,16 +36,30 @@ export async function assembleProject(
   // Copy template to temp directory
   await copyDirectory(templatePath, projectPath);
 
-  // Inject generated contracts
+  // Inject generated contracts into packages/foundry/src/
   for (const contract of generatedCode.contracts) {
     const contractPath = path.join(
       projectPath,
       "packages",
-      "hardhat",
-      "contracts",
+      "foundry",
+      "src",
       contract.name
     );
     await fs.writeFile(contractPath, contract.content, "utf-8");
+  }
+
+  // Inject generated tests into packages/foundry/test/
+  if (generatedCode.tests && generatedCode.tests.length > 0) {
+    for (const test of generatedCode.tests) {
+      const testPath = path.join(
+        projectPath,
+        "packages",
+        "foundry",
+        "test",
+        test.name
+      );
+      await fs.writeFile(testPath, test.content, "utf-8");
+    }
   }
 
   // Inject generated pages
@@ -105,7 +120,7 @@ export default deployedContracts satisfies GenericContractsDeclaration;
 }
 
 /**
- * Creates a deploy script for the generated contract
+ * Creates a Foundry deploy script for the generated contract
  */
 async function createDeployScript(
   projectPath: string,
@@ -115,29 +130,36 @@ async function createDeployScript(
   const deployScriptPath = path.join(
     projectPath,
     "packages",
-    "hardhat",
-    "deploy",
-    "00_deploy_contract.ts"
+    "foundry",
+    "script",
+    "Deploy.s.sol"
   );
 
-  const content = `import { HardhatRuntimeEnvironment } from "hardhat/types";
-import { DeployFunction } from "hardhat-deploy/types";
+  const content = `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
 
-const deployContract: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
-  const { deployer } = await hre.getNamedAccounts();
-  const { deploy } = hre.deployments;
+import "forge-std/Script.sol";
+import "../src/${contractName}.sol";
 
-  await deploy("${contractName}", {
-    from: deployer,
-    args: [], // Add constructor arguments if needed
-    log: true,
-    autoMine: true,
-  });
-};
-
-export default deployContract;
-
-deployContract.tags = ["${contractName}"];
+/**
+ * @notice Deploy script for ${contractName}
+ * @dev Run with: forge script script/Deploy.s.sol --rpc-url <rpc_url> --broadcast
+ */
+contract DeployScript is Script {
+    function run() external returns (${contractName}) {
+        uint256 deployerPrivateKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
+        
+        vm.startBroadcast(deployerPrivateKey);
+        
+        ${contractName} instance = new ${contractName}();
+        
+        vm.stopBroadcast();
+        
+        console.log("${contractName} deployed at:", address(instance));
+        
+        return instance;
+    }
+}
 `;
 
   await fs.writeFile(deployScriptPath, content, "utf-8");

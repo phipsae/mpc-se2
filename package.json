@@ -1,12 +1,19 @@
 {
-  "name": "mpc-sre",
+  "name": "mpc-se2",
   "version": "0.1.0",
   "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "build:packages": "yarn workspace @mpc-se2/core build && yarn workspace @mpc-se2/mcp-server build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "mcp:build": "yarn build:packages",
+    "mcp:start": "node packages/mcp-server/dist/index.js --stdio",
+    "mcp:http": "node packages/mcp-server/dist/index.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.2",

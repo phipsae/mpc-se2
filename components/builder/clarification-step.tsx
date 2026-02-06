@@ -23,6 +23,7 @@ export function ClarificationStep() {
     setPlan,
     setIsLoading,
     setLoadingMessage,
+    setProjectName,
   } = useBuilderStore();
 
   const handleSubmit = async () => {
@@ -44,6 +45,10 @@ export function ClarificationStep() {
 
       if (data.status === "ready") {
         setPlan(data.plan);
+        // Set project name from AI suggestion
+        if (data.plan.suggestedProjectName) {
+          setProjectName(data.plan.suggestedProjectName);
+        }
         setStep("plan");
       } else {
         console.error("Unexpected response:", data);

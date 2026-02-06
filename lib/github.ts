@@ -255,6 +255,163 @@ export async function createRepoAndPushFiles(
 }
 
 /**
+ * Updates an existing GitHub repository with new files
+ */
+export async function updateRepoFiles(
+  accessToken: string,
+  repoUrl: string,
+  files: FileToCommit[],
+  commitMessage: string = "Update from AI dApp Builder"
+): Promise<GitHubRepoResult> {
+  const octokit = new Octokit({ auth: accessToken });
+
+  try {
+    // Extract owner and repo name from URL
+    // URL format: https://github.com/owner/repo or https://github.com/owner/repo.git
+    const match = repoUrl.match(/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?$/);
+    if (!match) {
+      return {
+        success: false,
+        error: "Invalid GitHub repository URL",
+        errorCode: "INVALID_URL",
+      };
+    }
+    const [, owner, repoName] = match;
+
+    console.log(`Updating existing repository: ${owner}/${repoName}`);
+
+    // Get the default branch's latest commit
+    let latestCommitSha: string;
+    try {
+      const { data: ref } = await octokit.rest.git.getRef({
+        owner,
+        repo: repoName,
+        ref: "heads/main",
+      });
+      latestCommitSha = ref.object.sha;
+    } catch (refError) {
+      if (isOctokitError(refError) && refError.status === 404) {
+        return {
+          success: false,
+          error: "Repository not found or you don't have access to it.",
+          errorCode: "REPO_NOT_FOUND",
+        };
+      }
+      throw refError;
+    }
+
+    // Get the tree of the latest commit
+    const { data: latestCommit } = await octokit.rest.git.getCommit({
+      owner,
+      repo: repoName,
+      commit_sha: latestCommitSha,
+    });
+
+    // Create blobs for each file
+    const blobs = await Promise.all(
+      files.map(async (file) => {
+        const { data: blob } = await octokit.rest.git.createBlob({
+          owner,
+          repo: repoName,
+          content: Buffer.from(file.content).toString("base64"),
+          encoding: "base64",
+        });
+        return {
+          path: file.path,
+          mode: "100644" as const,
+          type: "blob" as const,
+          sha: blob.sha,
+        };
+      })
+    );
+
+    // Create a new tree with all the files
+    const { data: newTree } = await octokit.rest.git.createTree({
+      owner,
+      repo: repoName,
+      base_tree: latestCommit.tree.sha,
+      tree: blobs,
+    });
+
+    // Create a new commit
+    const { data: newCommit } = await octokit.rest.git.createCommit({
+      owner,
+      repo: repoName,
+      message: commitMessage,
+      tree: newTree.sha,
+      parents: [latestCommitSha],
+    });
+
+    // Update the reference to point to the new commit
+    await octokit.rest.git.updateRef({
+      owner,
+      repo: repoName,
+      ref: "heads/main",
+      sha: newCommit.sha,
+    });
+
+    console.log(`Successfully pushed update to ${owner}/${repoName}`);
+
+    return {
+      success: true,
+      repoUrl: repoUrl,
+      repoName: repoName,
+    };
+  } catch (error) {
+    console.error("GitHub API error:", error);
+    
+    if (isOctokitError(error)) {
+      const status = error.status;
+      const message = error.message;
+      
+      if (status === 401) {
+        return {
+          success: false,
+          error: "GitHub session expired. Please reconnect your GitHub account.",
+          errorCode: "AUTH_EXPIRED",
+        };
+      }
+      
+      if (status === 403) {
+        return {
+          success: false,
+          error: "GitHub permission denied. Please ensure you have write access to this repository.",
+          errorCode: "PERMISSION_DENIED",
+        };
+      }
+      
+      if (status === 404) {
+        return {
+          success: false,
+          error: "GitHub repository not found. It may have been deleted or renamed.",
+          errorCode: "REPO_NOT_FOUND",
+        };
+      }
+      
+      if (status === 409) {
+        return {
+          success: false,
+          error: "Conflict updating repository. Please try again.",
+          errorCode: "CONFLICT",
+        };
+      }
+      
+      return {
+        success: false,
+        error: `GitHub error (${status}): ${message}`,
+        errorCode: "GITHUB_ERROR",
+      };
+    }
+    
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Failed to update repository",
+      errorCode: "UNKNOWN",
+    };
+  }
+}
+
+/**
  * Generates a unique repository name based on the project
  */
 export function generateRepoName(contractName: string): string {

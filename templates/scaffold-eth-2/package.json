@@ -1,22 +1,20 @@
 {
-  "name": "se2-project",
+  "name": "se2-foundry-project",
   "version": "0.0.1",
   "private": true,
   "workspaces": {
     "packages": [
-      "packages/hardhat",
+      "packages/foundry",
       "packages/nextjs"
     ]
   },
   "scripts": {
-    "account": "yarn workspace @se2/hardhat account",
-    "chain": "yarn workspace @se2/hardhat chain",
-    "compile": "yarn workspace @se2/hardhat compile",
-    "deploy": "yarn workspace @se2/hardhat deploy",
-    "flatten": "yarn workspace @se2/hardhat flatten",
-    "fork": "yarn workspace @se2/hardhat fork",
-    "generate": "yarn workspace @se2/hardhat generate",
-    "lint": "yarn next:lint && yarn hardhat:lint",
+    "build": "yarn workspace @se2/foundry build",
+    "test": "yarn workspace @se2/foundry test",
+    "deploy": "yarn workspace @se2/foundry deploy",
+    "deploy:sepolia": "yarn workspace @se2/foundry deploy:sepolia",
+    "deploy:baseSepolia": "yarn workspace @se2/foundry deploy:baseSepolia",
+    "lint": "yarn next:lint",
     "next:build": "yarn workspace @se2/nextjs build",
     "next:check-types": "yarn workspace @se2/nextjs check-types",
     "next:lint": "yarn workspace @se2/nextjs lint",
@@ -24,11 +22,6 @@
     "postinstall": "husky install",
     "precommit": "lint-staged",
     "start": "yarn workspace @se2/nextjs dev",
-    "test": "yarn hardhat:test",
-    "hardhat:lint": "yarn workspace @se2/hardhat lint",
-    "hardhat:lint-staged": "yarn workspace @se2/hardhat lint-staged",
-    "hardhat:test": "yarn workspace @se2/hardhat test",
-    "verify": "yarn workspace @se2/hardhat verify",
     "vercel": "yarn workspace @se2/nextjs vercel",
     "vercel:yolo": "yarn workspace @se2/nextjs vercel:yolo"
   },

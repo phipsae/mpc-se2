@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useAccount, useWalletClient, usePublicClient } from "wagmi";
-import { AlertCircle } from "lucide-react";
+import { AlertCircle, Pencil } from "lucide-react";
 import { useBuilderStore } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,14 +10,22 @@ import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 type DeploymentPhase = "contract" | "github" | "vercel" | "done";
 
-const PHASE_STEPS = [
+const FULL_PHASE_STEPS = [
   { id: "contract", label: "Deploying Contract", description: "Deploying smart contract to blockchain" },
   { id: "github", label: "Pushing to GitHub", description: "Creating repository and pushing code" },
   { id: "vercel", label: "Deploying to Vercel", description: "Building and deploying frontend" },
   { id: "done", label: "Complete", description: "Your dApp is live!" },
+];
+
+const FRONTEND_ONLY_PHASE_STEPS = [
+  { id: "github", label: "Pushing to GitHub", description: "Updating repository with frontend changes" },
+  { id: "vercel", label: "Deploying to Vercel", description: "Building and deploying frontend" },
+  { id: "done", label: "Complete", description: "Your dApp is updated!" },
 ];
 
 export function DeployStep() {
@@ -41,11 +49,23 @@ export function DeployStep() {
     deployment: previousDeployment,
     githubRepo: previousGithubRepo,
     plan,
+    projectName,
+    setProjectName,
+    hasContractChanges,
+    setOriginalGeneratedCode,
   } = useBuilderStore();
 
-  const [currentPhase, setCurrentPhase] = useState<DeploymentPhase>("contract");
+  // Determine if this is a frontend-only update (no contract changes)
+  const isFrontendOnlyUpdate = isEditMode && previousDeployment && !hasContractChanges();
+  
+  // Select appropriate phase steps
+  const PHASE_STEPS = isFrontendOnlyUpdate ? FRONTEND_ONLY_PHASE_STEPS : FULL_PHASE_STEPS;
+  
+  const [currentPhase, setCurrentPhase] = useState<DeploymentPhase>(
+    isFrontendOnlyUpdate ? "github" : "contract"
+  );
   const [phaseStatus, setPhaseStatus] = useState<Record<string, "pending" | "loading" | "success" | "error">>({
-    contract: "pending",
+    contract: isFrontendOnlyUpdate ? "success" : "pending", // Skip contract phase for frontend-only
     github: "pending",
     vercel: "pending",
   });
@@ -54,12 +74,34 @@ export function DeployStep() {
   const [contractAbi, setContractAbi] = useState<unknown[] | null>(null);
   const [githubRepoUrl, setGithubRepoUrl] = useState<string | null>(null);
   const [githubRepoName, setGithubRepoName] = useState<string | null>(null);
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [waitingForNameConfirmation, setWaitingForNameConfirmation] = useState(false);
 
-  const progress = 
-    currentPhase === "contract" ? 25 :
-    currentPhase === "github" ? 50 :
-    currentPhase === "vercel" ? 75 :
-    100;
+  // Initialize project name from plan's suggestion if not set
+  useEffect(() => {
+    if (!projectName && plan?.suggestedProjectName) {
+      setProjectName(plan.suggestedProjectName);
+    } else if (!projectName && generatedCode?.contracts[0]?.name) {
+      // Fallback to contract name
+      const fallbackName = generatedCode.contracts[0].name
+        .replace(".sol", "")
+        .replace(/([A-Z])/g, "-$1")
+        .toLowerCase()
+        .replace(/^-/, "")
+        .replace(/[^a-z0-9-]/g, "-") + "-dapp";
+      setProjectName(fallbackName);
+    }
+  }, [plan, generatedCode, projectName, setProjectName]);
+
+  // Progress calculation - different for frontend-only vs full deploy
+  const progress = isFrontendOnlyUpdate
+    ? (currentPhase === "github" ? 33 :
+       currentPhase === "vercel" ? 66 :
+       100)
+    : (currentPhase === "contract" ? 25 :
+       currentPhase === "github" ? 50 :
+       currentPhase === "vercel" ? 75 :
+       100);
 
   const deployContract = async () => {
     if (!walletClient || !publicClient || !generatedCode) {
@@ -255,7 +297,10 @@ export function DeployStep() {
 
   const pushToGitHub = async () => {
     setPhaseStatus((prev) => ({ ...prev, github: "loading" }));
-    setLoadingMessage("Creating GitHub repository...");
+    
+    // Update message based on whether we're creating or updating
+    const isUpdating = !!previousGithubRepo;
+    setLoadingMessage(isUpdating ? "Pushing changes to GitHub..." : "Creating GitHub repository...");
 
     try {
       const contractName = generatedCode?.contracts[0]?.name.replace(".sol", "") || "Contract";
@@ -269,6 +314,8 @@ export function DeployStep() {
           networkId: selectedNetwork,
           contractName,
           abi: contractAbi,
+          projectName: projectName || undefined, // Use user's chosen name
+          existingRepo: previousGithubRepo || undefined, // Pass existing repo to update instead of creating new
         }),
       });
 
@@ -281,7 +328,7 @@ export function DeployStep() {
         setPhaseStatus((prev) => ({ ...prev, github: "success" }));
         setCurrentPhase("vercel");
       } else {
-        throw new Error(data.error || "Failed to create GitHub repository");
+        throw new Error(data.error || (isUpdating ? "Failed to update GitHub repository" : "Failed to create GitHub repository"));
       }
     } catch (err) {
       console.error("GitHub error:", err);
@@ -329,7 +376,7 @@ export function DeployStep() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           githubRepoUrl,
-          repoName: githubRepoName,
+          repoName: projectName || githubRepoName, // Use user's chosen name
           vercelToken,
         }),
       });
@@ -341,9 +388,10 @@ export function DeployStep() {
         setVercelDeployment({ url: data.deploymentUrl, projectId: data.projectId });
         setPhaseStatus((prev) => ({ ...prev, vercel: "success" }));
         setCurrentPhase("done");
-        // Clear edit mode when deployment is complete
+        // Clear edit mode and original code tracking when deployment is complete
         if (isEditMode) {
           setIsEditMode(false);
+          setOriginalGeneratedCode(null); // Reset so current code becomes the new baseline
         }
         setStep("results");
       } else {
@@ -358,14 +406,48 @@ export function DeployStep() {
     }
   };
 
-  // Auto-advance through phases
+  // Start frontend-only deployment (skips contract, goes straight to GitHub)
+  const startFrontendOnlyDeploy = async () => {
+    if (!previousDeployment) {
+      setError("No previous deployment found. Cannot perform frontend-only update.");
+      return;
+    }
+
+    // Reuse the existing contract address and deployment info
+    setContractAddress(previousDeployment.contractAddress);
+    
+    // Get ABI by compiling (we need it for the GitHub push)
+    try {
+      const compileResponse = await fetch("/api/compile", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contracts: generatedCode?.contracts }),
+      });
+      const { abi } = await compileResponse.json();
+      setContractAbi(abi);
+    } catch {
+      // If compilation fails, try to proceed without ABI update
+      console.warn("Could not get ABI, proceeding with existing contract info");
+    }
+
+    // Skip to GitHub phase - wait for name confirmation
+    setWaitingForNameConfirmation(true);
+  };
+
+  // Auto-advance through phases (but wait for name confirmation before GitHub)
   useEffect(() => {
     if (currentPhase === "github" && phaseStatus.contract === "success" && phaseStatus.github === "pending") {
-      pushToGitHub();
+      // Wait for user to confirm project name before pushing
+      setWaitingForNameConfirmation(true);
     } else if (currentPhase === "vercel" && phaseStatus.github === "success" && phaseStatus.vercel === "pending") {
       deployToVercel();
     }
   }, [currentPhase, phaseStatus]);
+
+  const handleConfirmNameAndPush = () => {
+    setWaitingForNameConfirmation(false);
+    pushToGitHub();
+  };
 
   if (!isConnected) {
     return (
@@ -388,7 +470,22 @@ export function DeployStep() {
   return (
     <div className="space-y-6">
       {/* Edit Mode Notice */}
-      {isEditMode && (
+      {isEditMode && isFrontendOnlyUpdate && (
+        <Alert className="border-green-500/50 bg-green-500/5">
+          <AlertCircle className="h-4 w-4 text-green-500" />
+          <AlertTitle className="text-green-600">Frontend Update Mode</AlertTitle>
+          <AlertDescription>
+            No contract changes detected. Only the frontend will be updated. 
+            {previousDeployment && (
+              <span className="block mt-1 text-xs">
+                Using existing contract: {previousDeployment.contractAddress.slice(0, 10)}...{previousDeployment.contractAddress.slice(-8)}
+              </span>
+            )}
+          </AlertDescription>
+        </Alert>
+      )}
+      
+      {isEditMode && !isFrontendOnlyUpdate && (
         <Alert className="border-amber-500/50 bg-amber-500/5">
           <AlertCircle className="h-4 w-4 text-amber-500" />
           <AlertTitle className="text-amber-600">Redeployment Mode</AlertTitle>
@@ -405,10 +502,16 @@ export function DeployStep() {
 
       <div className="text-center">
         <h1 className="text-3xl font-bold mb-2">
-          {isEditMode ? "Redeploying Your dApp" : "Deploying Your dApp"}
+          {isFrontendOnlyUpdate 
+            ? "Updating Your dApp Frontend" 
+            : isEditMode 
+              ? "Redeploying Your dApp" 
+              : "Deploying Your dApp"}
         </h1>
         <p className="text-muted-foreground">
-          This may take a few minutes
+          {isFrontendOnlyUpdate 
+            ? "Pushing frontend changes - no contract redeployment needed"
+            : "This may take a few minutes"}
         </p>
       </div>
 
@@ -506,6 +609,62 @@ export function DeployStep() {
         ))}
       </div>
 
+      {/* Project Name Confirmation */}
+      {waitingForNameConfirmation && (
+        <Card className="border-primary">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Pencil className="h-5 w-5" />
+              Name Your Project
+            </CardTitle>
+            <CardDescription>
+              Choose a name for your GitHub repository. This will also be used for Vercel deployment.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="projectName">Project Name</Label>
+              <div className="flex gap-2">
+                <Input
+                  id="projectName"
+                  value={projectName}
+                  onChange={(e) => {
+                    // Sanitize input: lowercase, alphanumeric and hyphens only
+                    const sanitized = e.target.value
+                      .toLowerCase()
+                      .replace(/[^a-z0-9-]/g, "-")
+                      .replace(/--+/g, "-")
+                      .replace(/^-/, "");
+                    setProjectName(sanitized);
+                  }}
+                  placeholder="my-awesome-dapp"
+                  className="font-mono"
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Use lowercase letters, numbers, and hyphens only. This will be your repository name on GitHub.
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <Button onClick={handleConfirmNameAndPush} disabled={!projectName}>
+                Push to GitHub
+              </Button>
+              <Button 
+                variant="outline" 
+                onClick={() => {
+                  // Reset to suggested name
+                  if (plan?.suggestedProjectName) {
+                    setProjectName(plan.suggestedProjectName);
+                  }
+                }}
+              >
+                Reset to Suggested
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Error */}
       {error && (
         <Card className="border-red-500">
@@ -573,14 +732,26 @@ export function DeployStep() {
               <div className="text-sm text-muted-foreground border-t pt-4 mt-4">
                 <p className="font-medium mb-2">Troubleshooting tips:</p>
                 <ul className="list-disc list-inside space-y-1">
+                  <li>
+                    <strong>Most common issue:</strong> Vercel needs access to your GitHub repos.{" "}
+                    <a href="https://vercel.com/account/integrations" target="_blank" rel="noopener noreferrer" className="underline text-primary">
+                      Click here to configure GitHub integration
+                    </a>
+                    , then select &quot;All repositories&quot; or add this specific repo.
+                  </li>
                   <li>Make sure your Vercel token is valid and not expired</li>
-                  <li>Ensure Vercel is connected to your GitHub account at{" "}
-                    <a href="https://vercel.com/account/integrations" target="_blank" rel="noopener noreferrer" className="underline">
-                      vercel.com/account/integrations
+                  <li>
+                    Check your{" "}
+                    <a href="https://vercel.com/dashboard" target="_blank" rel="noopener noreferrer" className="underline">
+                      Vercel dashboard
+                    </a>
+                    {" "}for any failed builds or error logs
+                  </li>
+                  <li>Try generating a new token at{" "}
+                    <a href="https://vercel.com/account/tokens" target="_blank" rel="noopener noreferrer" className="underline">
+                      vercel.com/account/tokens
                     </a>
                   </li>
-                  <li>Grant Vercel access to the repository in GitHub integration settings</li>
-                  <li>Try generating a new token at vercel.com/account/tokens</li>
                 </ul>
               </div>
             )}
@@ -588,8 +759,8 @@ export function DeployStep() {
         </Card>
       )}
 
-      {/* Start Deploy Button */}
-      {currentPhase === "contract" && phaseStatus.contract === "pending" && (
+      {/* Start Deploy Button - Full deploy */}
+      {!isFrontendOnlyUpdate && currentPhase === "contract" && phaseStatus.contract === "pending" && (
         <Card>
           <CardContent className="pt-6">
             <div className="flex items-center justify-between">
@@ -605,6 +776,30 @@ export function DeployStep() {
                 </Button>
                 <Button onClick={deployContract}>
                   Deploy Now
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Start Deploy Button - Frontend-only update */}
+      {isFrontendOnlyUpdate && currentPhase === "github" && phaseStatus.github === "pending" && !waitingForNameConfirmation && (
+        <Card>
+          <CardContent className="pt-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="font-medium">Ready to update frontend</h4>
+                <p className="text-sm text-muted-foreground">
+                  No contract changes detected. Only the frontend will be redeployed.
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <Button variant="outline" onClick={() => setStep("preview")}>
+                  ← Back
+                </Button>
+                <Button onClick={startFrontendOnlyDeploy}>
+                  Update Frontend
                 </Button>
               </div>
             </div>

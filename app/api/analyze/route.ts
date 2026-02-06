@@ -52,9 +52,16 @@ If ready to proceed:
     "features": ["Feature 1", "Feature 2"],
     "pages": [
       { "path": "/pagename", "description": "What this page does" }
-    ]
+    ],
+    "suggestedProjectName": "short-descriptive-name"
   }
 }
+
+PROJECT NAME RULES:
+- suggestedProjectName should be a short, descriptive name for the project (3-5 words max)
+- Use lowercase letters, numbers, and hyphens only (GitHub-compatible)
+- Make it memorable and descriptive of what the project does
+- Examples: "nft-marketplace", "staking-rewards-dapp", "crypto-lottery", "token-swap"
 
 ONLY return valid JSON, no other text.`;
 

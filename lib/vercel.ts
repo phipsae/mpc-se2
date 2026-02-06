@@ -44,13 +44,13 @@ export async function createVercelDeployment(
     );
 
     if (existingProjectResponse.ok) {
-      // Project exists - check for deployments or trigger one
+      // Project exists - trigger a new deployment
       const existingProject = await existingProjectResponse.json();
-      console.log("Project already exists, checking deployments...");
+      console.log("Project already exists, triggering new deployment...");
 
-      // Check for existing deployments
-      const deploymentsResponse = await fetch(
-        `https://api.vercel.com/v6/deployments?projectId=${existingProject.id}&limit=1`,
+      // Fetch project details to get repoId
+      const projectDetailsResponse = await fetch(
+        `https://api.vercel.com/v9/projects/${existingProject.id}`,
         {
           headers: {
             Authorization: `Bearer ${accessToken}`,
@@ -58,68 +58,81 @@ export async function createVercelDeployment(
         }
       );
 
-      if (deploymentsResponse.ok) {
-        const deploymentsData = await deploymentsResponse.json();
-        const latestDeployment = deploymentsData.deployments?.[0];
-
-        if (latestDeployment && latestDeployment.readyState === "READY") {
-          const deploymentUrl = latestDeployment.url 
-            ? `https://${latestDeployment.url}`
-            : `https://${projectName}.vercel.app`;
+      if (projectDetailsResponse.ok) {
+        const projectDetails = await projectDetailsResponse.json();
+        const repoId = projectDetails.link?.repoId;
+        
+        if (repoId) {
+          console.log("Triggering deployment with repoId:", repoId);
           
+          const deployResponse = await fetch("https://api.vercel.com/v13/deployments", {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              name: projectName,
+              project: existingProject.id,
+              target: "production",
+              gitSource: {
+                type: "github",
+                repoId: repoId,
+                ref: "main",
+              },
+            }),
+          });
+
+          if (deployResponse.ok) {
+            const deployment = await deployResponse.json();
+            console.log("Deployment triggered:", deployment.id);
+            
+            try {
+              const deploymentUrl = await waitForDeployment(
+                accessToken,
+                deployment.uid || deployment.id,
+                180000
+              );
+              
+              return {
+                success: true,
+                deploymentUrl,
+                projectId: existingProject.id,
+              };
+            } catch (waitError) {
+              console.error("Error waiting for deployment:", waitError);
+              return {
+                success: true,
+                deploymentUrl: `https://${projectName}.vercel.app`,
+                projectId: existingProject.id,
+              };
+            }
+          } else {
+            const deployError = await deployResponse.json();
+            const errorMessage = deployError.error?.message || JSON.stringify(deployError);
+            console.error("Failed to trigger deployment:", errorMessage);
+            
+            return {
+              success: false,
+              error: `Failed to trigger deployment: ${errorMessage}`,
+              projectId: existingProject.id,
+            };
+          }
+        } else {
+          console.error("Project not linked to GitHub (no repoId found)");
           return {
-            success: true,
-            deploymentUrl,
+            success: false,
+            error: "Project is not linked to a GitHub repository. Please check your Vercel project settings.",
             projectId: existingProject.id,
           };
         }
       }
 
-      // No deployment or not ready - trigger a new deployment
-      console.log("No ready deployment found, triggering new deployment...");
-      
-      const deployResponse = await fetch("https://api.vercel.com/v13/deployments", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          name: projectName,
-          project: existingProject.id,
-          target: "production",
-          gitSource: {
-            type: "github",
-            repo: repoFullName,
-            ref: "main",
-          },
-        }),
-      });
-
-      if (deployResponse.ok) {
-        const deployment = await deployResponse.json();
-        
-        // Wait for deployment to be ready
-        const deploymentUrl = await waitForDeployment(
-          accessToken,
-          deployment.id,
-          120000
-        );
-
-        return {
-          success: true,
-          deploymentUrl,
-          projectId: existingProject.id,
-        };
-      }
-
-      // If deployment trigger failed, return project URL anyway
-      const deployError = await deployResponse.json();
-      console.error("Failed to trigger deployment:", deployError);
-      
+      // Fallback - couldn't fetch project details
+      console.error("Could not fetch project details");
       return {
-        success: true,
-        deploymentUrl: `https://${projectName}.vercel.app`,
+        success: false,
+        error: "Could not fetch project details from Vercel",
         projectId: existingProject.id,
       };
     }
@@ -147,8 +160,23 @@ export async function createVercelDeployment(
             repo: repoFullName,
           },
           rootDirectory: "packages/nextjs",
-          buildCommand: "npm run build",
-          installCommand: "npm install",
+          buildCommand: "yarn build",
+          installCommand: "yarn install",
+          // Environment variables for the dApp
+          environmentVariables: [
+            {
+              key: "NEXT_PUBLIC_ALCHEMY_API_KEY",
+              value: process.env.NEXT_PUBLIC_ALCHEMY_API_KEY || "",
+              target: ["production", "preview", "development"],
+              type: "plain",
+            },
+            {
+              key: "NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID", 
+              value: process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || "",
+              target: ["production", "preview", "development"],
+              type: "plain",
+            },
+          ].filter(env => env.value), // Only include vars that have values
         }),
       });
 
@@ -156,11 +184,29 @@ export async function createVercelDeployment(
         const project: VercelProject = await projectResponse.json();
         console.log("Vercel project created:", project.name);
 
-        // Wait for GitHub to sync with Vercel
-        await new Promise((resolve) => setTimeout(resolve, 5000));
+        // Wait a moment for GitHub link to be established
+        await new Promise((resolve) => setTimeout(resolve, 3000));
 
-        // Check if auto-deployment started
-        let deploymentsResponse = await fetch(
+        // Fetch project details to get the linked repoId
+        const projectDetailsResponse = await fetch(
+          `https://api.vercel.com/v9/projects/${project.id}`,
+          {
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+            },
+          }
+        );
+
+        let repoId: number | null = null;
+        if (projectDetailsResponse.ok) {
+          const projectDetails = await projectDetailsResponse.json();
+          repoId = projectDetails.link?.repoId;
+          console.log("Got linked repoId:", repoId);
+        }
+
+        // Check for auto-deployment first
+        let latestDeployment = null;
+        const deploymentsResponse = await fetch(
           `https://api.vercel.com/v6/deployments?projectId=${project.id}&limit=1`,
           {
             headers: {
@@ -169,12 +215,14 @@ export async function createVercelDeployment(
           }
         );
 
-        let deploymentsData = deploymentsResponse.ok ? await deploymentsResponse.json() : { deployments: [] };
-        let latestDeployment = deploymentsData.deployments?.[0];
+        if (deploymentsResponse.ok) {
+          const deploymentsData = await deploymentsResponse.json();
+          latestDeployment = deploymentsData.deployments?.[0];
+        }
 
-        // If no auto-deployment, trigger one manually
-        if (!latestDeployment) {
-          console.log("No auto-deployment detected, triggering manually...");
+        // If no auto-deployment and we have repoId, trigger manually
+        if (!latestDeployment && repoId) {
+          console.log("No auto-deployment detected, triggering with repoId...");
           
           const deployResponse = await fetch("https://api.vercel.com/v13/deployments", {
             method: "POST",
@@ -188,7 +236,7 @@ export async function createVercelDeployment(
               target: "production",
               gitSource: {
                 type: "github",
-                repo: repoFullName,
+                repoId: repoId,
                 ref: "main",
               },
             }),
@@ -199,30 +247,7 @@ export async function createVercelDeployment(
             console.log("Manual deployment triggered:", latestDeployment.id);
           } else {
             const deployError = await deployResponse.json();
-            console.error("Failed to trigger manual deployment:", deployError);
-            
-            // Try alternative deployment method using source files
-            console.log("Trying alternative deployment method...");
-            const altDeployResponse = await fetch("https://api.vercel.com/v13/deployments", {
-              method: "POST",
-              headers: {
-                Authorization: `Bearer ${accessToken}`,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                name: projectName,
-                project: project.id,
-                target: "production",
-              }),
-            });
-            
-            if (altDeployResponse.ok) {
-              latestDeployment = await altDeployResponse.json();
-              console.log("Alternative deployment triggered:", latestDeployment.id);
-            } else {
-              const altError = await altDeployResponse.json();
-              console.error("Alternative deployment also failed:", altError);
-            }
+            console.error("Failed to trigger deployment:", deployError);
           }
         }
 
@@ -241,7 +266,18 @@ export async function createVercelDeployment(
             };
           } catch (waitError) {
             console.error("Error waiting for deployment:", waitError);
-            // Return project URL even if deployment wait failed
+            const errorMsg = waitError instanceof Error ? waitError.message : "Unknown error";
+            
+            // If deployment errored or was canceled, report the failure
+            if (errorMsg.includes("error") || errorMsg.includes("canceled")) {
+              return {
+                success: false,
+                error: `Vercel build failed: ${errorMsg}. Check vercel.com/dashboard for build logs.`,
+                projectId: project.id,
+              };
+            }
+            
+            // If it's just taking too long, return the URL with a warning
             return {
               success: true,
               deploymentUrl: `https://${project.name}.vercel.app`,
@@ -250,8 +286,9 @@ export async function createVercelDeployment(
           }
         }
 
-        // No deployment could be triggered - return project URL
-        console.log("No deployment available, returning project URL");
+        // Project was created but no deployment could be triggered
+        // Return success with URL - Vercel will deploy on next push
+        console.log("Project created, deployment pending. Push to GitHub to trigger.");
         return {
           success: true,
           deploymentUrl: `https://${project.name}.vercel.app`,
