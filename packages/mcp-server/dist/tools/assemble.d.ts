@@ -22,4 +22,16 @@ export declare function createAssembleProjectTool(ctx: SessionContext): {
         files: string[];
     }>;
 };
+export declare function createExportProjectTool(ctx: SessionContext): {
+    handler: (args: {
+        projectId: string;
+    }) => Promise<{
+        projectId: string;
+        fileCount: number;
+        files: {
+            path: string;
+            content: string;
+        }[];
+    }>;
+};
 //# sourceMappingURL=assemble.d.ts.map

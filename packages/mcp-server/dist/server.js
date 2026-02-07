@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 // Import tool factories
 import { compileContractsTool, checkSecurityTool } from "./tools/compile.js";
-import { createAssembleProjectTool } from "./tools/assemble.js";
+import { createAssembleProjectTool, createExportProjectTool } from "./tools/assemble.js";
 import { createStartAnvilTool, createStopAnvilTool, runTestsTool, createDeployLocalTool, } from "./tools/testing.js";
 import { createPushGithubTool } from "./tools/deploy.js";
 export function createServer(ctx) {
@@ -12,11 +12,12 @@ export function createServer(ctx) {
     });
     // Create context-bound tool instances
     const assembleProjectTool = createAssembleProjectTool(ctx);
+    const exportProjectTool = createExportProjectTool(ctx);
     const startAnvilTool = createStartAnvilTool(ctx);
     const stopAnvilTool = createStopAnvilTool(ctx);
     const deployLocalTool = createDeployLocalTool(ctx);
     const pushGithubTool = createPushGithubTool(ctx);
-    // Register 8 infrastructure tools
+    // Register 9 infrastructure tools
     // 1. compile_contracts
     server.tool("compile_contracts", "Compile Solidity contracts using solc with automatic OpenZeppelin v5 import resolution from unpkg CDN. Returns ABI, bytecode, errors, and warnings.", {
         contracts: z.array(z.object({ name: z.string(), content: z.string() })),
@@ -119,6 +120,18 @@ export function createServer(ctx) {
     }, async (args) => {
         try {
             const result = await pushGithubTool.handler(args);
+            return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+        }
+        catch (e) {
+            return { content: [{ type: "text", text: JSON.stringify({ error: e.message }) }], isError: true };
+        }
+    });
+    // 9. export_project
+    server.tool("export_project", "Export all files from an assembled project as [{path, content}] so they can be written to the user's local machine. Requires assemble_project first. Use this for testnet/mainnet deploys so private keys stay local.", {
+        projectId: z.string().describe("Project ID (must have been assembled first)"),
+    }, async (args) => {
+        try {
+            const result = await exportProjectTool.handler(args);
             return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
         }
         catch (e) {

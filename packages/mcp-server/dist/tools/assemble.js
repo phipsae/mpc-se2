@@ -21,4 +21,23 @@ export function createAssembleProjectTool(ctx) {
         },
     };
 }
+export function createExportProjectTool(ctx) {
+    return {
+        handler: async (args) => {
+            const project = ctx.projectStore.getProject(args.projectId);
+            if (!project?.projectPath) {
+                throw new Error(`Project "${args.projectId}" not found or not assembled. Call assemble_project first.`);
+            }
+            const allFiles = await getAllFiles(project.projectPath);
+            return {
+                projectId: args.projectId,
+                fileCount: allFiles.length,
+                files: allFiles.map((f) => ({
+                    path: f.relativePath,
+                    content: f.content,
+                })),
+            };
+        },
+    };
+}
 //# sourceMappingURL=assemble.js.map
